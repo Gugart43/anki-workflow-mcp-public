@@ -3,8 +3,10 @@
 use anki_domain::{Diagnostic, NoteType, compute_receipt_v1};
 use anki_parser::{count_batch_cards, split_row};
 use anki_validate::{
-    check_cloze, check_crossrefs, check_csv, check_hints, check_images_field, check_notes,
-    check_qa, check_tables_field, check_tags, escape_cell, markdown_tables_to_html, sanitize_field,
+    MediaFigure, NoteFlow, check_cloze, check_crossrefs, check_csv, check_hints,
+    check_images_field, check_notes, check_qa, check_tables_field, check_tags, escape_cell,
+    infer_campo_estudo, markdown_tables_to_html, purge_id_leak, render_media_figure,
+    render_note_flow, renumber_cloze, sanitize_field,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -106,6 +108,21 @@ enum OracleRequest {
     },
     MarkdownTablesToHtml {
         text: String,
+    },
+    PurgeIdLeak {
+        text: String,
+    },
+    InferCampoEstudo {
+        etiquetas: serde_json::Value,
+    },
+    RenumberCloze {
+        text: String,
+    },
+    RenderMediaFigure {
+        figure: MediaFigure,
+    },
+    RenderNoteFlow {
+        flow: NoteFlow,
     },
 }
 
@@ -284,6 +301,34 @@ fn run_oracle() -> Result<(), String> {
                 let (text, count) = markdown_tables_to_html(&text);
                 OracleResponse::TextAndCount { text, count }
             }
+            OracleRequest::PurgeIdLeak { text } => OracleResponse::Text {
+                text: purge_id_leak(&text),
+            },
+            OracleRequest::InferCampoEstudo { etiquetas } => {
+                let tags = match etiquetas {
+                    serde_json::Value::Array(items) => items
+                        .into_iter()
+                        .map(|item| item.as_str().unwrap_or("").to_owned())
+                        .collect::<Vec<_>>(),
+                    serde_json::Value::String(text) => text
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                OracleResponse::Text {
+                    text: infer_campo_estudo(&tags),
+                }
+            }
+            OracleRequest::RenumberCloze { text } => OracleResponse::Text {
+                text: renumber_cloze(&text),
+            },
+            OracleRequest::RenderMediaFigure { figure } => OracleResponse::Text {
+                text: render_media_figure(&figure),
+            },
+            OracleRequest::RenderNoteFlow { flow } => OracleResponse::Text {
+                text: render_note_flow(&flow),
+            },
         };
         responses.push(resp);
     }
