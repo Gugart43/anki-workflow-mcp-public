@@ -2,7 +2,7 @@
 
 use anki_domain::{Diagnostic, NoteType, compute_receipt_v1};
 use anki_parser::{count_batch_cards, split_row};
-use anki_validate::{check_csv, sanitize_field};
+use anki_validate::{check_cloze, check_csv, check_hints, check_notes, check_qa, sanitize_field};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 use std::process::ExitCode;
@@ -37,6 +37,33 @@ enum OracleRequest {
         #[serde(default = "default_true")]
         enforce_header: bool,
     },
+    CheckCloze {
+        sentence: String,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default)]
+        field: Option<String>,
+    },
+    CheckHints {
+        sentence: String,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default)]
+        field: Option<String>,
+    },
+    CheckQa {
+        enunciado: String,
+        resposta: String,
+        #[serde(default)]
+        row: Option<usize>,
+    },
+    CheckNotes {
+        notes: String,
+        #[serde(default)]
+        answer: String,
+        #[serde(default)]
+        row: Option<usize>,
+    },
 }
 
 fn default_true() -> bool {
@@ -56,6 +83,9 @@ enum OracleResponse {
         fixes: Vec<String>,
     },
     CheckCsv {
+        diagnostics: Vec<Diagnostic>,
+    },
+    Diagnostics {
         diagnostics: Vec<Diagnostic>,
     },
 }
@@ -101,6 +131,30 @@ fn run_oracle() -> Result<(), String> {
                 enforce_header,
             } => OracleResponse::CheckCsv {
                 diagnostics: check_csv(&csv_text, note_type, enforce_header),
+            },
+            OracleRequest::CheckCloze {
+                sentence,
+                row,
+                field,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_cloze(&sentence, row, field.as_deref()),
+            },
+            OracleRequest::CheckHints {
+                sentence,
+                row,
+                field,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_hints(&sentence, row, field.as_deref()),
+            },
+            OracleRequest::CheckQa {
+                enunciado,
+                resposta,
+                row,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_qa(&enunciado, &resposta, row),
+            },
+            OracleRequest::CheckNotes { notes, answer, row } => OracleResponse::Diagnostics {
+                diagnostics: check_notes(&notes, &answer, row),
             },
         };
         responses.push(resp);

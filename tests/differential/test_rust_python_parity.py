@@ -12,7 +12,11 @@ from typing import Any
 import pytest
 
 from anki_mcp.checks.batch import count_batch
+from anki_mcp.checks.cloze import check_cloze
 from anki_mcp.checks.csv_structure import check_csv
+from anki_mcp.checks.hints import check_hints
+from anki_mcp.checks.notes import check_notes
+from anki_mcp.checks.qa import check_qa
 from anki_mcp.core.receipt import compute_receipt
 from anki_mcp.core.rows import split_row
 from anki_mcp.core.sanitize import sanitize_field
@@ -154,6 +158,72 @@ def test_python_vs_rust_golden_parity() -> None:
         expected_python.append(
             (
                 f"check_csv:{case['name']}",
+                {"diagnostics": [d.model_dump(mode="json") for d in diags]},
+            )
+        )
+
+    for case in fixtures["check_cloze"]:
+        requests.append(
+            {
+                "op": "check_cloze",
+                "sentence": case["sentence"],
+                "row": case["row"],
+            }
+        )
+        diags = check_cloze(case["sentence"], row=case["row"])
+        expected_python.append(
+            (
+                f"check_cloze:{case['name']}",
+                {"diagnostics": [d.model_dump(mode="json") for d in diags]},
+            )
+        )
+
+    for case in fixtures["check_hints"]:
+        requests.append(
+            {
+                "op": "check_hints",
+                "sentence": case["sentence"],
+                "row": case["row"],
+            }
+        )
+        diags = check_hints(case["sentence"], row=case["row"])
+        expected_python.append(
+            (
+                f"check_hints:{case['name']}",
+                {"diagnostics": [d.model_dump(mode="json") for d in diags]},
+            )
+        )
+
+    for case in fixtures["check_qa"]:
+        requests.append(
+            {
+                "op": "check_qa",
+                "enunciado": case["enunciado"],
+                "resposta": case["resposta"],
+                "row": case["row"],
+            }
+        )
+        diags = check_qa(case["enunciado"], case["resposta"], row=case["row"])
+        expected_python.append(
+            (
+                f"check_qa:{case['name']}",
+                {"diagnostics": [d.model_dump(mode="json") for d in diags]},
+            )
+        )
+
+    for case in fixtures["check_notes"]:
+        requests.append(
+            {
+                "op": "check_notes",
+                "notes": case["notes"],
+                "answer": case["answer"],
+                "row": case["row"],
+            }
+        )
+        diags = check_notes(case["notes"], answer=case["answer"], row=case["row"])
+        expected_python.append(
+            (
+                f"check_notes:{case['name']}",
                 {"diagnostics": [d.model_dump(mode="json") for d in diags]},
             )
         )

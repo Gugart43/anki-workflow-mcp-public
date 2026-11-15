@@ -19,6 +19,16 @@
       "name": "pathological_cr_and_unicode",
       "qa_csv": "Enunciado|Resposta\r\r\nDose ≥ 0,9 mg/kg (máx 90 mg) &#124; µg/dL|Sim — atenção à PA &lt; 185/110 mmHg\r",
       "cloze_csv": "Sentença|Notas\n{{c1::\\frac{a}{b}::fração}} e – travessão\r\r\nSem newline final"
+    },
+    {
+      "name": "anexo_a_cr_collapse_and_medial_cr",
+      "qa_csv": "a\r\r\nb\r\nc\n",
+      "cloze_csv": "a\rb\n\r\nd\r"
+    },
+    {
+      "name": "anexo_a_synthetic_exact_sha256",
+      "qa_csv": "Enunciado|Resposta|Etiquetas|Notas Adicionais|Imagens Relacionadas\nQual?|Isto|T::x||\n",
+      "cloze_csv": "Sentença|Etiquetas|Notas Adicionais|Imagens Relacionadas\nO {{c1::x}} é y|T::x||\n"
     }
   ],
   "split_row": [
@@ -78,6 +88,12 @@
       "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQ1|R1|N||||\nQ2|R2|N||||\nQ3|R3|N||||\nQ4|R4|N||||\nQ5|R5|N||||\nQ6|R6|N||||\nQ7|R7|N||||\nQ8|R8|N||||\nQ9|R9|N||||\nQ10|R10|N||||\nQ11|R11|N||||\nQ12|R12|N||||\nQ13|R13|N||||\nQ14|R14|N||||\nQ15|R15|N||||\nQ16|R16|N||||\nQ17|R17|N||||\nQ18|R18|N||||\nQ19|R19|N||||\nQ20|R20|N||||\nQ21|R21|N||||\n",
       "cloze_csv": "",
       "batch_id": "CUSTOM"
+    },
+    {
+      "name": "anexo_c_unicode_line_separators_and_fs_whitespace",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\u2028Q1|R1|N||||\u0085\u001c\u000bQ2|R2|N||||",
+      "cloze_csv": "Sentença|Notas|Campo|Img|Ref|Tags\u2028\u001c\n{{c1::a}}|n|N|||",
+      "batch_id": "B04"
     }
   ],
   "sanitize_field": [
@@ -136,6 +152,63 @@
       "note_type": "CL",
       "enforce_header": false,
       "csv_text": "Sentença|Notas|Campo|Img|Ref|Tags\n<figure><img src=\"x.png\"></figure>|Texto &amp; <unknown>ok</unknown>|Neuro||Ref|tag\n"
+    }
+  ],
+  "check_cloze": [
+    {
+      "name": "valid_clinical_cloze",
+      "sentence": "Na meningite bacteriana aguda em adultos, a antibioticoterapia empírica inclui {{c1::ceftriaxona::cefalosporina}} associada a {{c2::vancomicina}}.",
+      "row": 2
+    },
+    {
+      "name": "nonseq_nested_and_id_in_text",
+      "sentence": "[ANKI-12] A {{c2::fenitoína}} e {{c4::{{c1::valproato}}}} são usados.",
+      "row": 3
+    },
+    {
+      "name": "acronym_leak_and_boundary",
+      "sentence": "Na {{c1::acidente vascular cerebral}} (AVC) isquêmico, a {{c2::em 30 mg}} é usada.",
+      "row": 4
+    }
+  ],
+  "check_hints": [
+    {
+      "name": "valid_domain_hint",
+      "sentence": "O fármaco de escolha na crise de ausência é a {{c1::etossuximida::anticonvulsivante}}.",
+      "row": 2
+    },
+    {
+      "name": "root_leak_and_elimination",
+      "sentence": "A {{c1::hiponatremia::hiponatremia grave}} é tratada com {{c2::solução salina::sim ou não}}.",
+      "row": 3
+    }
+  ],
+  "check_qa": [
+    {
+      "name": "valid_qa",
+      "enunciado": "Qual o tratamento de primeira linha para status epilepticus inicial?",
+      "resposta": "Lorazepam IV 4 mg",
+      "row": 2
+    },
+    {
+      "name": "yesno_id_and_cardinality",
+      "enunciado": "ANKI-09 A alteplase é indicada? (A) Sim (B) Não (C) Talvez",
+      "resposta": "Sim, pois: 1. janela 4,5h; 2. sem hemorragia; 3. PA controlada; 4. INR normal",
+      "row": 3
+    }
+  ],
+  "check_notes": [
+    {
+      "name": "valid_notes_with_html_list",
+      "notes": "<ul class=\"nl\"><li><span class=\"rot\">Dose:</span> 0,9 mg/kg (máx 90 mg)</li></ul>",
+      "answer": "Alteplase IV",
+      "row": 2
+    },
+    {
+      "name": "metadata_dup_and_style",
+      "notes": "- item sem bold\nFonte: Harrison\nAlteplase IV",
+      "answer": "Alteplase IV",
+      "row": 3
     }
   ]
 }

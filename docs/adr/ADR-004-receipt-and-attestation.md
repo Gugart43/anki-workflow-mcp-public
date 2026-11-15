@@ -18,10 +18,13 @@ Qualquer cliente pode computar esse hash localmente sem ter executado `validate_
 
 1. **Preservar `compute_receipt_v1` bit a bit** em `anki_domain::compute_receipt_v1` para compatibilidade com `content_hash` do legado.
 2. **Introduzir `ValidationAttestation` (v2)** persistida exclusivamente pelo servidor no SQLite do workflow (`validation_attestations`) após conclusão sem `CRITICAL` e sem `INCOMPLETE`:
-   - `attestation_id`, `deck_id`, `batch_id`, `phase`
-   - `content_digest` (v1/v2), `context_digest` (taxonomia/catálogo/IDs)
-   - `policy_version`, `engine_version`, `verdict`, `valid`, `created_at`
-3. No modo `strict_v2`, `manifesto_commit` e `export_final` autorizam a operação consultando a atestação transacionalmente no snapshot ativo (prevenindo TOCTOU). Alterações no conteúdo, taxonomia ou catálogo invalidam atestações anteriores.
+   - `attestation_id`, `deck_id`, `batch_id`, `phase`, `snapshot_id`, `operation_id`
+   - `content_digest` (v1/v2), `context_digest` (taxonomia/catálogo/IDs), `mutation_payload_digest` (cobrindo `new_ids`, tópicos, tags, changelog e catálogo — ressalva P-06)
+   - `gate_params_digest`, `schema_version`, `policy_version`, `engine_version` (ressalva P-01)
+   - `verdict`, `valid` (`CHECK(valid IN (0,1))`), `revoked_at`, `created_at`, e identidade do emissor quando em modo remoto
+   - Índice parcial por `(deck_id, batch_id, phase) WHERE valid = 1`
+3. No modo `strict_v2`, `manifesto_commit` e `export_final` autorizam a operação consultando a atestação transacionalmente no snapshot ativo (prevenindo TOCTOU). Alterações no conteúdo, taxonomia, catálogo ou payload de mutação invalidam atestações anteriores.
+4. **Âncora de confiança local (P-18):** no modelo local, o próprio `anki_workflow.db` é a âncora de confiança; opcionalmente, a atestação pode ser autenticada com HMAC-SHA256 usando chave armazenada no gerenciador de segredos do SO.
 
 ## Teste que valida esta decisão
 

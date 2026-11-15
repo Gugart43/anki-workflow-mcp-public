@@ -76,6 +76,14 @@ pub fn py_splitlines(text: &str) -> Vec<&str> {
     lines
 }
 
+/// Python-compatible whitespace check (`str.strip()`), including ASCII control
+/// separators `\x1c`..=`\x1f` which `char::is_whitespace` excludes.
+#[must_use]
+pub fn py_is_blank(s: &str) -> bool {
+    s.chars()
+        .all(|ch| ch.is_whitespace() || matches!(ch, '\x1c'..='\x1f'))
+}
+
 /// Return `(1-based line number, raw line)` for every non-blank line after the header.
 #[must_use]
 pub fn iter_data_lines(csv_text: &str) -> Vec<(usize, &str)> {
@@ -83,7 +91,7 @@ pub fn iter_data_lines(csv_text: &str) -> Vec<(usize, &str)> {
         .into_iter()
         .enumerate()
         .skip(1)
-        .filter(|(_, line)| !line.trim().is_empty())
+        .filter(|(_, line)| !py_is_blank(line))
         .map(|(idx, line)| (idx + 1, line))
         .collect()
 }

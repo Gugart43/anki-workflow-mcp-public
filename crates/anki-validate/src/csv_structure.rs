@@ -8,7 +8,7 @@ use anki_domain::{
     CLOZE_FIELDS, CLOZE_HEADER_CANONICAL, Diagnostic, NoteType, QA_FIELDS, QA_HEADER_CANONICAL,
     Severity,
 };
-use anki_parser::{py_splitlines, split_row};
+use anki_parser::{py_is_blank, py_splitlines, split_row};
 use regex::Regex;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -381,7 +381,7 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
 
     for (idx, line) in lines.iter().enumerate().skip(1) {
         let lineno = idx + 1;
-        if line.trim().is_empty() {
+        if py_is_blank(line) {
             continue;
         }
 

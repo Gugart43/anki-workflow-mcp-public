@@ -81,8 +81,38 @@ async def export_all() -> None:
     _dump_json(OUT_DIR / "resources.json", {"count": len(resources_data), "resources": resources_data})
     _dump_json(OUT_DIR / "prompts.json", {"count": len(prompts_data), "prompts": prompts_data})
 
+    import sys
+    import unicodedata
+
+    phases = ["started", "drafted", "curated", "enriched", "illustrated", "validated", "exported"]
+    phase_rules_outputs = {}
+    prompt_obj = next((p for p in prompts if p.name == "phase_rules"), None)
+    if prompt_obj is not None:
+        for ph in phases:
+            rendered = await prompt_obj.render({"phase": ph})
+            msgs = getattr(rendered, "messages", rendered)
+            out_msgs = []
+            for msg in msgs:
+                content = getattr(msg, "content", msg)
+                out_msgs.append(getattr(content, "text", str(content)))
+            phase_rules_outputs[ph] = out_msgs
+
+    _dump_json(
+        OUT_DIR / "server_meta.json",
+        {
+            "server_info": {
+                "name": mcp.name,
+                "version": mcp.version,
+            },
+            "instructions": mcp.instructions,
+            "python_version": sys.version,
+            "unidata_version": unicodedata.unidata_version,
+            "phase_rules": phase_rules_outputs,
+        },
+    )
+
     print(
-        f"Exported {len(tools_data)} tools, {len(resources_data)} resources, {len(prompts_data)} prompts to {OUT_DIR}"
+        f"Exported {len(tools_data)} tools, {len(resources_data)} resources, {len(prompts_data)} prompts + server_meta to {OUT_DIR}"
     )
 
 
