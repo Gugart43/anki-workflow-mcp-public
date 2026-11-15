@@ -12,8 +12,10 @@ from typing import Any
 import pytest
 
 from anki_mcp.checks.batch import count_batch
+from anki_mcp.checks.csv_structure import check_csv
 from anki_mcp.core.receipt import compute_receipt
 from anki_mcp.core.rows import split_row
+from anki_mcp.core.sanitize import sanitize_field
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = ROOT / "fixtures" / "golden_parity.json"
@@ -111,6 +113,48 @@ def test_python_vs_rust_golden_parity() -> None:
             (
                 f"count_batch_cards:{case['name']}",
                 bc.model_dump(mode="json"),
+            )
+        )
+
+    for case in fixtures["sanitize_field"]:
+        requests.append(
+            {
+                "op": "sanitize_field",
+                "text": case["text"],
+                "is_images_field": case["is_images_field"],
+                "convert_markdown": case["convert_markdown"],
+            }
+        )
+        sanitized, fixes = sanitize_field(
+            case["text"],
+            is_images_field=case["is_images_field"],
+            convert_markdown=case["convert_markdown"],
+        )
+        expected_python.append(
+            (
+                f"sanitize_field:{case['name']}",
+                {"sanitized": sanitized, "fixes": fixes},
+            )
+        )
+
+    for case in fixtures["check_csv"]:
+        requests.append(
+            {
+                "op": "check_csv",
+                "csv_text": case["csv_text"],
+                "note_type": case["note_type"],
+                "enforce_header": case["enforce_header"],
+            }
+        )
+        diags = check_csv(
+            case["csv_text"],
+            case["note_type"],
+            enforce_header=case["enforce_header"],
+        )
+        expected_python.append(
+            (
+                f"check_csv:{case['name']}",
+                {"diagnostics": [d.model_dump(mode="json") for d in diags]},
             )
         )
 

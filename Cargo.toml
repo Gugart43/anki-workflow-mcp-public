@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/anki-domain",
     "crates/anki-parser",
+    "crates/anki-validate",
     "apps/anki-workflow-mcp",
 ]
 

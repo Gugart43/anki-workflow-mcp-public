@@ -79,6 +79,96 @@ pub struct BatchCount {
 /// Maximum Anki cards per batch in the legacy operational policy.
 pub const MAX_BATCH: usize = 20;
 
+/// Canonical QA CSV fields (`models/__init__.py::QA_FIELDS`).
+pub const QA_FIELDS: [&str; 7] = [
+    "Enunciado",
+    "Resposta",
+    "Campo de Estudo",
+    "Notas Adicionais",
+    "Imagens Relacionadas",
+    "Referências",
+    "Etiquetas",
+];
+
+/// Canonical Cloze CSV fields (`models/__init__.py::CLOZE_FIELDS`).
+pub const CLOZE_FIELDS: [&str; 6] = [
+    "Sentença",
+    "Notas Adicionais",
+    "Campo de Estudo",
+    "Imagens Relacionadas",
+    "Referências",
+    "Etiquetas",
+];
+
+/// Canonical QA CSV header line.
+pub const QA_HEADER_CANONICAL: &str = "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas";
+
+/// Canonical Cloze CSV header line.
+pub const CLOZE_HEADER_CANONICAL: &str =
+    "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas";
+
+/// A single validation finding (`models/__init__.py::Diagnostic`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub code: String,
+    pub severity: Severity,
+    pub owner_skill: String,
+    pub message: String,
+    pub row: Option<usize>,
+    pub field: Option<String>,
+    pub suggestion: Option<String>,
+    pub auto_fix_available: bool,
+    pub fix_preview: Option<String>,
+}
+
+impl Diagnostic {
+    /// Build a diagnostic from a registered error code.
+    #[must_use]
+    pub fn new(
+        code: impl Into<String>,
+        severity: Severity,
+        owner_skill: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            severity,
+            owner_skill: owner_skill.into(),
+            message: message.into(),
+            row: None,
+            field: None,
+            suggestion: None,
+            auto_fix_available: false,
+            fix_preview: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_row(mut self, row: usize) -> Self {
+        self.row = Some(row);
+        self
+    }
+
+    #[must_use]
+    pub fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.field = Some(field.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_auto_fix(mut self, available: bool, preview: Option<String>) -> Self {
+        self.auto_fix_available = available;
+        self.fix_preview = preview;
+        self
+    }
+}
+
 /// Legacy v1 receipt token (`sha256:` + 64 lowercase hex chars).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]

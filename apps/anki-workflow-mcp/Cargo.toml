@@ -10,5 +10,6 @@ workspace = true
 [dependencies]
 anki-domain = { path = "../../crates/anki-domain" }
 anki-parser = { path = "../../crates/anki-parser" }
+anki-validate = { path = "../../crates/anki-validate" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

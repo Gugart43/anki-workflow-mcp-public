@@ -79,5 +79,63 @@
       "cloze_csv": "",
       "batch_id": "CUSTOM"
     }
+  ],
+  "sanitize_field": [
+    {
+      "name": "empty",
+      "text": "",
+      "is_images_field": false,
+      "convert_markdown": true
+    },
+    {
+      "name": "clinical_inequalities_pipe_newlines_amp",
+      "text": "p < 0.05 | PA >= 140/90 & FC <= 60\n<b>Conduta</b> &amp; <i>seguimento</i>",
+      "is_images_field": false,
+      "convert_markdown": true
+    },
+    {
+      "name": "markdown_bold_italic_and_unclosed_tag",
+      "text": "**Importante**: *dose* de <u>ataque e __manutenção__",
+      "is_images_field": false,
+      "convert_markdown": true
+    },
+    {
+      "name": "images_field_preserves_figure_and_img",
+      "text": "<figure class=\"anki-figure\"><img src=\"fig1.png\" alt=\"TC crânio\"><figcaption>PA < 180</figcaption></figure>",
+      "is_images_field": true,
+      "convert_markdown": false
+    },
+    {
+      "name": "non_images_field_escapes_img",
+      "text": "<img src=\"x.png\"> & <!-- oculto < 5 -->",
+      "is_images_field": false,
+      "convert_markdown": false
+    }
+  ],
+  "check_csv": [
+    {
+      "name": "valid_qa_csv",
+      "note_type": "QA",
+      "enforce_header": true,
+      "csv_text": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQual a janela da alteplase?|Até <b>4,5 h</b>|Neurologia|<span class=\"pearl\">Atenção</span>|<figure class=\"anki-figure\"><img src=\"a.png\" alt=\"x\"></figure>|AHA 2026|AVC\n"
+    },
+    {
+      "name": "header_mismatch_and_column_shift",
+      "note_type": "QA",
+      "enforce_header": true,
+      "csv_text": "Errado|Coluna\nA|B|C\n"
+    },
+    {
+      "name": "entities_amp_tags_classes_mathjax_comments",
+      "note_type": "CL",
+      "enforce_header": true,
+      "csv_text": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n{{c1::PA < 185}} & $x$ <!-- dead -->|<b>unclosed <span class=\"desconhecida\">x</span> <script>alert(1)</script>|Neuro|<figure><img src=\"x.png\"></figure>|Ref|tag\n\\(a + b = c\\) e \\[x|Notas|Neuro||Ref|tag\n"
+    },
+    {
+      "name": "figure_outside_images_field",
+      "note_type": "CL",
+      "enforce_header": false,
+      "csv_text": "Sentença|Notas|Campo|Img|Ref|Tags\n<figure><img src=\"x.png\"></figure>|Texto &amp; <unknown>ok</unknown>|Neuro||Ref|tag\n"
+    }
   ]
 }
