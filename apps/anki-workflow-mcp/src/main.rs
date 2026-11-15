@@ -4,9 +4,9 @@ use anki_domain::{Diagnostic, NoteType, compute_receipt_v1};
 use anki_parser::{count_batch_cards, split_row};
 use anki_validate::{
     MediaFigure, NoteFlow, check_cloze, check_crossrefs, check_csv, check_hints,
-    check_images_field, check_notes, check_qa, check_tables_field, check_tags, escape_cell,
-    infer_campo_estudo, markdown_tables_to_html, purge_id_leak, render_media_figure,
-    render_note_flow, renumber_cloze, sanitize_field,
+    check_images_field, check_notes, check_qa, check_tables_field, check_tags, compile_drafts,
+    escape_cell, infer_campo_estudo, markdown_tables_to_html, partition_quarantine, patch_draft,
+    purge_id_leak, render_media_figure, render_note_flow, renumber_cloze, sanitize_field,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -124,6 +124,27 @@ enum OracleRequest {
     RenderNoteFlow {
         flow: NoteFlow,
     },
+    CompileDrafts {
+        drafts: Vec<serde_json::Value>,
+        #[serde(default = "default_true")]
+        auto_renumber_cloze: bool,
+        #[serde(default = "default_true")]
+        auto_purge_id_leaks: bool,
+        #[serde(default)]
+        default_campo_estudo: String,
+    },
+    PatchDraft {
+        draft: serde_json::Value,
+        updates: serde_json::Map<String, serde_json::Value>,
+    },
+    PartitionQuarantine {
+        drafts: Vec<serde_json::Value>,
+        failed_indices: Vec<usize>,
+        #[serde(default)]
+        diagnostics: Vec<serde_json::Value>,
+        #[serde(default = "default_quarantine_reason")]
+        reason: String,
+    },
 }
 
 fn default_tags_field() -> String {
@@ -138,6 +159,10 @@ fn default_notes_field() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_quarantine_reason() -> String {
+    "Validation failed after repair budget".to_owned()
 }
 
 #[derive(Debug, Serialize)]
@@ -165,6 +190,7 @@ enum OracleResponse {
         text: String,
         count: usize,
     },
+    DraftResult(serde_json::Value),
 }
 
 fn run_oracle() -> Result<(), String> {
@@ -329,6 +355,32 @@ fn run_oracle() -> Result<(), String> {
             OracleRequest::RenderNoteFlow { flow } => OracleResponse::Text {
                 text: render_note_flow(&flow),
             },
+            OracleRequest::CompileDrafts {
+                drafts,
+                auto_renumber_cloze,
+                auto_purge_id_leaks,
+                default_campo_estudo,
+            } => OracleResponse::DraftResult(compile_drafts(
+                &drafts,
+                auto_renumber_cloze,
+                auto_purge_id_leaks,
+                &default_campo_estudo,
+            )?),
+            OracleRequest::PatchDraft { draft, updates } => OracleResponse::DraftResult(
+                serde_json::json!({"card": patch_draft(&draft, &updates)?}),
+            ),
+            OracleRequest::PartitionQuarantine {
+                drafts,
+                failed_indices,
+                diagnostics,
+                reason,
+            } => {
+                let (valid, quarantined) =
+                    partition_quarantine(&drafts, &failed_indices, &diagnostics, &reason)?;
+                OracleResponse::DraftResult(
+                    serde_json::json!({"valid": valid, "quarantined": quarantined}),
+                )
+            }
         };
         responses.push(resp);
     }

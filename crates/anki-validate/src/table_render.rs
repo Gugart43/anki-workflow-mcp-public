@@ -56,8 +56,9 @@ pub fn escape_cell(text: &str) -> String {
     reopened.replace('|', "&#124;")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct TableSpec {
+    #[serde(default)]
     pub caption: String,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,

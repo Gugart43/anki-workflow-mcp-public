@@ -38,6 +38,7 @@ dependencies = [
  "anki-parser",
  "regex",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
