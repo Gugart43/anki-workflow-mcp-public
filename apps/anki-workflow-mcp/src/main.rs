@@ -1,12 +1,13 @@
 //! `anki-workflow-mcp` CLI & differential oracle entrypoint (v2 bootstrap).
 
 use anki_domain::{Diagnostic, NoteType, compute_receipt_v1};
-use anki_parser::{count_batch_cards, split_row};
+use anki_parser::{count_batch_cards_with_profile, split_row};
 use anki_validate::{
     MediaFigure, NoteFlow, check_cloze, check_crossrefs, check_csv, check_hints,
     check_images_field, check_notes, check_qa, check_tables_field, check_tags, compile_drafts,
     escape_cell, infer_campo_estudo, markdown_tables_to_html, partition_quarantine, patch_draft,
-    purge_id_leak, render_media_figure, render_note_flow, renumber_cloze, sanitize_field,
+    purge_id_leak, render_media_figure, render_note_flow, renumber_cloze, review_batch_information,
+    sanitize_field,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -29,6 +30,12 @@ enum OracleRequest {
         cloze_csv: String,
         #[serde(default)]
         batch_id: Option<String>,
+        #[serde(default)]
+        profile: anki_domain::CompatibilityProfile,
+    },
+    ReviewBatchInformation {
+        qa_csv: String,
+        cloze_csv: String,
     },
     SanitizeField {
         text: String,
@@ -173,6 +180,7 @@ enum OracleResponse {
     },
     SplitRow(anki_parser::SplitRow),
     CountBatchCards(anki_domain::BatchCount),
+    BatchInformationReview(anki_validate::BatchInformationReview),
     SanitizeField {
         sanitized: String,
         fixes: Vec<String>,
@@ -215,11 +223,18 @@ fn run_oracle() -> Result<(), String> {
                 qa_csv,
                 cloze_csv,
                 batch_id,
-            } => OracleResponse::CountBatchCards(count_batch_cards(
+                profile,
+            } => OracleResponse::CountBatchCards(count_batch_cards_with_profile(
                 &qa_csv,
                 &cloze_csv,
                 batch_id.as_deref(),
+                profile,
             )),
+            OracleRequest::ReviewBatchInformation { qa_csv, cloze_csv } => {
+                OracleResponse::BatchInformationReview(review_batch_information(
+                    &qa_csv, &cloze_csv,
+                ))
+            }
             OracleRequest::SanitizeField {
                 text,
                 is_images_field,

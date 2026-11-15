@@ -107,6 +107,7 @@ def test_python_vs_rust_golden_parity() -> None:
         requests.append(
             {
                 "op": "count_batch_cards",
+                "profile": "legacy_compat",  # Python remains the explicit compatibility oracle.
                 "qa_csv": case["qa_csv"],
                 "cloze_csv": case["cloze_csv"],
                 "batch_id": case["batch_id"],

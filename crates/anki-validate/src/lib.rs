@@ -1,5 +1,6 @@
 //! Deterministic validation and sanitization engine for `anki-workflow-mcp`.
 
+pub mod batch_information;
 pub mod cloze;
 pub mod cloze_renumber;
 pub mod crossrefs;
@@ -23,6 +24,9 @@ pub mod tables;
 pub mod tags;
 pub mod vocab;
 
+pub use batch_information::{
+    BatchInformationReview, CardInformationReview, review_batch_information,
+};
 pub use cloze::check_cloze;
 pub use cloze_renumber::renumber_cloze;
 pub use crossrefs::check_crossrefs;

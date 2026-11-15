@@ -1,6 +1,6 @@
 //! Pipe-delimited CSV row splitter, Cloze span parser, and batch card counter.
 
-use anki_domain::{BatchCount, MAX_BATCH};
+use anki_domain::{BatchCount, CompatibilityProfile, MAX_BATCH};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -249,6 +249,27 @@ pub fn count_batch_cards(qa_csv: &str, cloze_csv: &str, batch_id: Option<&str>) 
     }
 }
 
+/// Count in a specified policy profile; `strict_v2` never rejects a batch by size.
+///
+/// The legacy entry point remains available as a compatibility oracle.
+/// `within_limit` and `excess` are legacy-shaped serialization fields:
+/// in strict v2 they mean no *batch-size* violation, not approval of content.
+#[must_use]
+pub fn count_batch_cards_with_profile(
+    qa_csv: &str,
+    cloze_csv: &str,
+    batch_id: Option<&str>,
+    profile: CompatibilityProfile,
+) -> BatchCount {
+    let mut count = count_batch_cards(qa_csv, cloze_csv, batch_id);
+    if profile == CompatibilityProfile::StrictV2 {
+        count.within_limit = true;
+        count.excess = 0;
+        count.ext_batch_suggested = None;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +296,38 @@ mod tests {
         assert_eq!(spans[0].target, r"\frac{a}{b}");
         assert_eq!(spans[0].hint.as_deref(), Some("fração"));
         assert_eq!(count_cloze_indices(s), BTreeSet::from([1, 2]));
+    }
+
+    #[test]
+    fn strict_v2_counts_without_rejecting_a_large_batch() {
+        let qa_hdr = "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas";
+        let qa = format!(
+            "{qa_hdr}{}",
+            (0..21)
+                .map(|i| format!("\nQ{i}|R{i}|||||"))
+                .collect::<String>()
+        );
+        let cl_hdr =
+            "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas";
+        let strict = count_batch_cards_with_profile(
+            &qa,
+            cl_hdr,
+            Some("B03"),
+            anki_domain::CompatibilityProfile::StrictV2,
+        );
+        assert_eq!(strict.total, 21);
+        assert!(strict.within_limit);
+        assert_eq!(strict.excess, 0);
+        assert_eq!(strict.ext_batch_suggested, None);
+        let legacy = count_batch_cards_with_profile(
+            &qa,
+            cl_hdr,
+            Some("B03"),
+            anki_domain::CompatibilityProfile::LegacyCompat,
+        );
+        assert!(!legacy.within_limit);
+        assert_eq!(legacy.excess, 1);
+        assert_eq!(legacy.ext_batch_suggested.as_deref(), Some("B03-EXT"));
     }
 
     #[test]

@@ -26,6 +26,7 @@ Separar explicitamente dois perfis de execução:
    - Exige `ValidationAttestation` válida e não revogada no SQLite do workflow antes de `manifesto_commit` e `export_final`.
    - Bloqueia `export_final` (`BLOCKED`) se houver IDs obrigatórios ausentes no ledger.
    - Aplica matriz explícita e testada de gates por fase (`started` → `drafted` → `curated` → `enriched` → `illustrated` → `validated` → `exported`).
+   - Não impõe teto numérico de cartões por lote: registra a contagem total e revisa cada cartão (cada índice Cloze separadamente). Prioriza recuperação obrigatória, contexto necessário e explicação opcional; sinais automáticos são consultivos e não certificam validade clínica, fidelidade ou atomicidade sem revisão semântica.
    - Qualquer check obrigatório indisponível resulta em `INCOMPLETE`, nunca `PASS`.
 
 ## Teste que valida esta decisão
