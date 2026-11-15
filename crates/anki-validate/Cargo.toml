@@ -1,0 +1,16 @@
+[package]
+name = "anki-validate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anki-domain = { path = "../anki-domain" }
+anki-parser = { path = "../anki-parser" }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"

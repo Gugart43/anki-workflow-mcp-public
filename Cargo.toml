@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/anki-domain",
+    "crates/anki-parser",
+    "crates/anki-validate",
+    "apps/anki-workflow-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["anki-workflow-mcp contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

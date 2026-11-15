@@ -1,0 +1,17 @@
+[package]
+name = "anki-workflow-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anki-domain = { path = "../../crates/anki-domain" }
+anki-parser = { path = "../../crates/anki-parser" }
+anki-validate = { path = "../../crates/anki-validate" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmcp = { version = "3.10.0", features = ["transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }

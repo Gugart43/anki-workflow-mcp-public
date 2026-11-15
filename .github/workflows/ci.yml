@@ -2,16 +2,19 @@ name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
   pull_request:
     branches: ["main"]
 
 permissions:
   contents: read
 
+env:
+  PYTHONPATH: src
+
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
+  rust:
+    name: Rust & Parity (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -20,6 +23,61 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Cargo check
+        run: cargo check --workspace --all-targets --all-features --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace --all-features --locked
+
+      - name: Build primary binary
+        run: cargo build -p anki-workflow-mcp --locked
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install Python dev dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Run differential parity tests
+        run: uv run --frozen pytest tests/differential/ -v --tb=short
+
+  test:
+    name: Test (${{ matrix.os }})
+    # Protected checks cannot succeed while either Rust platform fails.
+    needs: rust
+    if: ${{ always() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Require Rust and parity on both platforms
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+        shell: bash
+        run: test "$RUST_RESULT" = success
+
       # Fixed actions; matrix values are static, not user-controlled input.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,11 +93,11 @@ jobs:
 
       - name: Lint & format check
         run: |
-          uv run ruff check src/ tests/
-          uv run ruff format --check src/ tests/
+          uv run --frozen ruff check src/ tests/
+          uv run --frozen ruff format --check src/ tests/
 
       - name: Run tests
-        run: uv run pytest -v --tb=short --cov=anki_mcp --cov-report=term-missing --cov-fail-under=70
+        run: uv run --frozen pytest -v --tb=short --cov=anki_mcp --cov-report=term-missing --cov-fail-under=70
 
       - name: Type check
-        run: uv run --with mypy mypy src/ --ignore-missing-imports --no-error-summary
+        run: uv run --frozen --with mypy mypy src/ --ignore-missing-imports --no-error-summary

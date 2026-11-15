@@ -1,0 +1,16 @@
+{
+  "count": 1,
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "Provide a value matching the following JSON schema: {\"type\":\"string\"}. Encode non-string values as JSON.",
+          "name": "phase",
+          "required": false
+        }
+      ],
+      "description": "Regras da fase atual do pipeline de flashcards",
+      "name": "phase_rules"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "count": 4,
+  "resources": [
+    {
+      "description": "JSON Schema do CardDraft para geração de cards clínicos",
+      "mime_type": "text/plain",
+      "name": "CardDraft Schema",
+      "uri": "schema://card-draft"
+    },
+    {
+      "description": "JSON Schema do Manifesto de governança",
+      "mime_type": "text/plain",
+      "name": "Manifesto Schema",
+      "uri": "schema://manifesto"
+    },
+    {
+      "description": "JSON Schema do relatório de validação",
+      "mime_type": "text/plain",
+      "name": "ValidationReport Schema",
+      "uri": "schema://report"
+    },
+    {
+      "description": "Cheatsheet das classes semânticas CSS do AnkiMBR",
+      "mime_type": "text/plain",
+      "name": "Semantic CSS Classes",
+      "uri": "vocab://classes"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+[package]
+name = "anki-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anki-domain = { path = "../anki-domain" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
