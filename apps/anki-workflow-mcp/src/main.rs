@@ -2,8 +2,12 @@
 
 use anki_domain::{Diagnostic, NoteType, compute_receipt_v1};
 use anki_parser::{count_batch_cards, split_row};
-use anki_validate::{check_cloze, check_csv, check_hints, check_notes, check_qa, sanitize_field};
+use anki_validate::{
+    check_cloze, check_crossrefs, check_csv, check_hints, check_images_field, check_notes,
+    check_qa, check_tables_field, check_tags, escape_cell, markdown_tables_to_html, sanitize_field,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::io::{self, Read};
 use std::process::ExitCode;
 
@@ -64,6 +68,55 @@ enum OracleRequest {
         #[serde(default)]
         row: Option<usize>,
     },
+    CheckTags {
+        tags_field: String,
+        taxonomy_nodes: Option<Vec<String>>,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default = "default_tags_field")]
+        field: String,
+    },
+    CheckCrossrefs {
+        text: String,
+        active_ids: Option<Vec<String>>,
+        current_batch_ids: Option<Vec<String>>,
+        #[serde(default)]
+        row: Option<usize>,
+        field: Option<String>,
+    },
+    CheckImagesField {
+        html: String,
+        catalog_filenames: Option<Vec<String>>,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default = "default_images_field")]
+        field: String,
+    },
+    CheckTablesField {
+        html: String,
+        #[serde(default = "default_notes_field")]
+        field: String,
+        #[serde(default)]
+        row: Option<usize>,
+        #[serde(default)]
+        face: bool,
+    },
+    EscapeCell {
+        text: String,
+    },
+    MarkdownTablesToHtml {
+        text: String,
+    },
+}
+
+fn default_tags_field() -> String {
+    "Etiquetas".to_owned()
+}
+fn default_images_field() -> String {
+    "Imagens Relacionadas".to_owned()
+}
+fn default_notes_field() -> String {
+    "Notas Adicionais".to_owned()
 }
 
 fn default_true() -> bool {
@@ -87,6 +140,13 @@ enum OracleResponse {
     },
     Diagnostics {
         diagnostics: Vec<Diagnostic>,
+    },
+    Text {
+        text: String,
+    },
+    TextAndCount {
+        text: String,
+        count: usize,
     },
 }
 
@@ -156,6 +216,74 @@ fn run_oracle() -> Result<(), String> {
             OracleRequest::CheckNotes { notes, answer, row } => OracleResponse::Diagnostics {
                 diagnostics: check_notes(&notes, &answer, row),
             },
+            OracleRequest::CheckTags {
+                tags_field,
+                taxonomy_nodes,
+                row,
+                field,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_tags(
+                    &tags_field,
+                    taxonomy_nodes
+                        .as_ref()
+                        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
+                        .as_ref(),
+                    row,
+                    &field,
+                ),
+            },
+            OracleRequest::CheckCrossrefs {
+                text,
+                active_ids,
+                current_batch_ids,
+                row,
+                field,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_crossrefs(
+                    &text,
+                    active_ids
+                        .as_ref()
+                        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
+                        .as_ref(),
+                    current_batch_ids
+                        .as_ref()
+                        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
+                        .as_ref(),
+                    row,
+                    field.as_deref(),
+                ),
+            },
+            OracleRequest::CheckImagesField {
+                html,
+                catalog_filenames,
+                row,
+                field,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_images_field(
+                    &html,
+                    catalog_filenames
+                        .as_ref()
+                        .map(|ids| ids.iter().cloned().collect::<HashSet<_>>())
+                        .as_ref(),
+                    row,
+                    &field,
+                ),
+            },
+            OracleRequest::CheckTablesField {
+                html,
+                field,
+                row,
+                face,
+            } => OracleResponse::Diagnostics {
+                diagnostics: check_tables_field(&html, &field, row, face),
+            },
+            OracleRequest::EscapeCell { text } => OracleResponse::Text {
+                text: escape_cell(&text),
+            },
+            OracleRequest::MarkdownTablesToHtml { text } => {
+                let (text, count) = markdown_tables_to_html(&text);
+                OracleResponse::TextAndCount { text, count }
+            }
         };
         responses.push(resp);
     }
