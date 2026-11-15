@@ -25,10 +25,20 @@
 
 - [x] 5.1 Executar cargo check, fmt, Clippy, testes completos e build, diferenciais e gates Python aplicáveis; registrar resultados reais.
 - [x] 5.2 Obter revisão independente final do candidato e inspecionar conteúdo exato do índice/histórico contra main, incluindo arquivos novos e privacidade.
-- [ ] 5.3 Criar PR e conferir leitura remota do head revisado; integrar apenas após CI e revisão aprovados, sem contornar proteção.
-- [ ] 5.4 Ler estado remoto, merge SHA e CI de main; confirmar preservação do worktree original e registrar relatório final com limitações.
+- [x] 5.3 Criar PR e conferir leitura remota do head revisado; integrar apenas após CI e revisão aprovados, sem contornar proteção.
+- [x] 5.4 Ler estado remoto, merge SHA e CI de main; confirmar preservação do worktree original e registrar relatório final com limitações.
 
 ## Workflow follow-up
 
 - Sincronizar e arquivar o change somente após tarefas e revisão concluídas; verificar specs e arquivo gerados.
 - A VPS permanece na implantação já existente, sem alteração neste change.
+
+## Evidências de conclusão
+
+- PR de implementação: https://github.com/Gugart43/anki-workflow-mcp-public/pull/8
+- Head revisado: `5e75f648bb7bfdbd6e31449d30bd7959202c2da4`.
+- Merge: `85ca3f4a0fb26f89560a35ce97b402effd49dcc5`.
+- CI pós-merge aprovado em Linux/Windows: https://github.com/Gugart43/anki-workflow-mcp-public/actions/runs/43771828638
+- Gates locais: 165 testes Rust; 107 testes no diretório diferencial (inclui testes Rust-only); suíte pública Python 667 aprovados, cobertura 90,73%; check/fmt/Clippy/Ruff/mypy e builds debug/release aprovados.
+- Dez subagentes concluídos: seis auditorias, três implementações disjuntas e revisão final independente sem blockers. Índice de publicação e histórico passaram no Gitleaks. Arquivos originais preservados e conferidos por hash.
+- Limites mantidos: seis ferramentas em memória, persistência Python, evidência literal sem certificação clínica, atestações não autenticadas e flags de exportação/certificação sempre falsas.
