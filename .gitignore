@@ -33,3 +33,8 @@ build/
 htmlcov/
 .DS_Store
 Thumbs.db
+# Rust build artifacts
+target/
+**/*.rs.bk
+*.profraw
+*.profdata

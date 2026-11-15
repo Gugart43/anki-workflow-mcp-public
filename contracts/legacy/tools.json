@@ -1,0 +1,1752 @@
+{
+  "count": 49,
+  "tools": [
+    {
+      "annotations": null,
+      "description": "Automatically repair and sanitize an entire draft CSV block (QA or Cloze). Enforces canonical header, repairs unescaped pipes and newlines in long free-text fields, escapes clinical inequalities (< 10, > 50) and bare '&', converts basic markdown, and auto-closes simple unclosed tags. Returns fixed_csv, fixes_applied, and residual diagnostics.",
+      "name": "batch_auto_fix",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "csv_text": {
+            "type": "string"
+          },
+          "note_type": {
+            "enum": [
+              "QA",
+              "CLOZE"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "csv_text",
+          "note_type"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "mechanics"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Apply a surgical patch directly to a CardDraft within a persistent batch staging file. staging_path: path to drafts.jsonl or .staging_{batch_id}/drafts.jsonl. card_index: 0-based index of card to update. patch_json: JSON string with 'updates'.",
+      "name": "batch_patch_draft",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "card_index": {
+            "type": "integer"
+          },
+          "patch_json": {
+            "type": "string"
+          },
+          "staging_path": {
+            "type": "string"
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "staging_path",
+          "card_index",
+          "patch_json"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "compiler"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Apply a surgical patch or field updates to a single CardDraft JSON object. Allows repairing a failed card in isolation without regenerating the entire batch. card_json: JSON string of CardDraft. patch_json: JSON string with 'updates' dictionary.",
+      "name": "card_patch_apply",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "card_json": {
+            "type": "string"
+          },
+          "patch_json": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "card_json",
+          "patch_json"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "compiler"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Partition invalid cards out of the active batch into a quarantine record. Allows the remaining valid cards to advance through G3 export under PARTIAL_PASS. drafts_json: list of CardDraft objects. failed_indices: 0-based indices of cards to isolate.",
+      "name": "card_quarantine",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "drafts_json": {},
+          "failed_indices": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "default": "Falha de validação persistente pós-reparo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "drafts_json",
+          "failed_indices"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "compiler"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Compile a list of structured CardDraft JSON objects into AnkiMBR-compliant QA and Cloze CSV blocks. Applies deterministic HTML escaping, sequential cloze renumbering (c1..cN), ID leak purging, markdown table conversion, and pipe-delimiter escaping. Accepts a JSON string of a list or {'cards': [...]}. Returns qa_csv, cloze_csv, and compilation stats.",
+      "name": "cards_compile_drafts",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_purge_ids": {
+            "default": true,
+            "type": "boolean"
+          },
+          "auto_renumber": {
+            "default": true,
+            "type": "boolean"
+          },
+          "default_campo_estudo": {
+            "default": "",
+            "type": "string"
+          },
+          "drafts_json": {}
+        },
+        "required": [
+          "drafts_json"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "compiler"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Load and index an extractor catalog (catalog.json, anki_catalog.csv, catalog.md, or central_images.json) into active memory and optionally register it in the deck's manifesto.json. Returns counts of figures, tables, valid clinical items, filtered extraction noise, and version hash.",
+      "name": "catalog_load",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_path": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "catalog_path"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Compare corpus vocabulary against the deck Manifesto to identify coverage gaps.",
+      "name": "corpus_coverage",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "description": "Absolute path to the deck directory (must contain manifesto.json).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Unified triage + coverage report for all corpus files in the deck.",
+      "name": "corpus_digest",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "description": "Absolute path to the deck directory (must contain manifesto.json).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Persist source material into the deck's corpus directory for later triage.",
+      "name": "corpus_load",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "description": "Absolute path to the deck directory (must contain manifesto.json).",
+            "type": "string"
+          },
+          "label": {
+            "description": "Descriptive name for this source (e.g. 'harrison_cap4', 'notebooklm_ep').\nConverted automatically to a safe filename.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Source material to save (markdown, plain text, or pasted excerpt).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "text",
+          "label"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Score source material for flashcard potential. Pass inline text or a stored label.",
+      "name": "corpus_triage",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "description": "Absolute path to the deck directory.",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "description": "Label of a previously stored corpus file (via ``corpus_load``).",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "description": "Inline source material to score. Takes priority over *label*.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Count the Anki card budget for a batch. QA notes = 1 card each. Cloze notes: each distinct cN index = 1 card. Returns qa_cards, cloze_notes, cloze_indices (expanded count), total, within_limit (≤20), excess, and ext_batch_suggested if over the limit.",
+      "name": "count_batch_cards",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "default": "",
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "qa_csv": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "qa_csv",
+          "cloze_csv"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "mechanics"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Build a single, guaranteed-safe pipe-delimited CSV row from a list of field values. Applies all formatting-guide rules: newlines→<br>, pipe→&#124;, inequalities→&lt;/&gt;, bare &→&amp; without double-escaping, while preserving valid HTML tags. fields must match the note type: 7 values for QA, 6 for Cloze. Returns the safe CSV line string.",
+      "name": "csv_build_row",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "mechanics"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Full deck health audit: orphan IDs, phantom IDs, batch integrity, and coverage summary.",
+      "name": "deck_audit",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Add a new subdeck to the 02_MEDICINA_AnkiMBR hierarchy and persist the update immediately. subdeck_path: the full or relative subdeck path to add (e.g. '02_MEDICINA_AnkiMBR::Ciclo Clínico::Oftalmologia::Catarata'). Automatically creates all missing parent levels in the hierarchy.",
+      "name": "deck_hierarchy_add",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "root_deck": {
+            "default": "02_MEDICINA_AnkiMBR",
+            "type": "string"
+          },
+          "subdeck_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subdeck_path"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "hierarchy"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Get the registered deck hierarchy for 02_MEDICINA_AnkiMBR. filter_prefix: optional sub-path filter (e.g. '02_MEDICINA_AnkiMBR::Ciclo Clínico::Neurologia'). max_depth: max nesting level to include (default 10). format_tree: if true, returns an ASCII/Unicode visual tree instead of list.",
+      "name": "deck_hierarchy_get",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "filter_prefix": {
+            "default": "02_MEDICINA_AnkiMBR",
+            "type": "string"
+          },
+          "format_tree": {
+            "default": false,
+            "type": "boolean"
+          },
+          "max_depth": {
+            "default": 10,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "tags": [
+        "hierarchy"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Search the 02_MEDICINA_AnkiMBR hierarchy for subdecks matching a keyword or topic. query: search string (e.g. 'Catarata', 'Neurologia', 'Glaucoma', 'Esclerose'). root_deck: root prefix to restrict to (default '02_MEDICINA_AnkiMBR').",
+      "name": "deck_hierarchy_search",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "root_deck": {
+            "default": "02_MEDICINA_AnkiMBR",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "hierarchy"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Synchronize deck hierarchy from the live Anki SQLite database collection.anki2. Safely handles running Anki locks and merges with any manually added subdecks.",
+      "name": "deck_hierarchy_sync",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "anki_collection_path": {
+            "default": "",
+            "type": "string"
+          },
+          "root_deck": {
+            "default": "02_MEDICINA_AnkiMBR",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "tags": [
+        "hierarchy"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Final transactional export of a validated batch; the SOLE writer of the final CSV files and of the Manifesto post-export. Requires the content_hash returned by pipeline_gate_check / validate_batch on PASS. Order: receipt check and full re-validation (read-only) → under one deck lock: ID checks, staged writes, replace, manifesto save; any failure rolls files back. Re-running with the same receipt on an exported batch returns ALREADY_EXPORTED and writes nothing. Parameters: deck_dir; batch_id; qa_csv; cloze_csv; receipt_hash; new_ids_json (JSON array of {id, batch, type, status, topic, anchor}); new_topics_json (JSON array of strings); changelog_json (JSON array of changelog objects); topic_slug (optional, e.g. 'EscleroseMultipla'); write_to_deck_root (also copy into the deck root, default True). Writes: deck_dir/exports/{batch_id}[_{topic_slug}]_QA.csv and _Cloze.csv.",
+      "name": "export_final",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "changelog_json": {
+            "default": "[]",
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "new_ids_json": {
+            "default": "[]",
+            "type": "string"
+          },
+          "new_topics_json": {
+            "default": "[]",
+            "type": "string"
+          },
+          "qa_csv": {
+            "type": "string"
+          },
+          "receipt_hash": {
+            "type": "string"
+          },
+          "topic_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "write_to_deck_root": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "batch_id",
+          "qa_csv",
+          "cloze_csv",
+          "receipt_hash"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Log a gap or unresolved decision point that halts the pipeline. Per the Gap Request Protocol in anki-card-generator: when the pipeline encounters a decision without a governing rule, it MUST halt and log here instead of inventing ad-hoc rules. deck_dir: deck folder path. batch_id: e.g. 'B07'. gap_description: clear description of the decision needed. context: relevant snippet or options. Returns a gap_id and logs it to the Manifesto suggestion queue.",
+      "name": "gap_request",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "context": {
+            "default": "",
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "gap_description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "batch_id",
+          "gap_description"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Query the ID ledger. filters: comma-separated values like 'batch=B01', 'status=active', 'type=QA'. Returns matching ID entries and a summary.",
+      "name": "id_ledger_query",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "type": "string"
+          },
+          "filters": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Rank and retrieve relevant figure and table entries from an extractor catalog. Uses token-based, accent-insensitive clinical matching across title, caption, tags, and filename, automatically filtering out extraction noise (dummy captions, copyright headers, tiny logos). item_type: 'all' | 'figure' | 'table'. Returns ranked candidates with ready-to-use namespaced filename, table dimensions, and <figure> HTML.",
+      "name": "image_candidates",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_path": {
+            "type": "string"
+          },
+          "include_noise": {
+            "default": false,
+            "type": "boolean"
+          },
+          "item_type": {
+            "default": "all",
+            "enum": [
+              "all",
+              "figure",
+              "table"
+            ],
+            "type": "string"
+          },
+          "max_results": {
+            "default": 10,
+            "type": "integer"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "catalog_path",
+          "query"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Apply the slug prefix to convert a raw filename to its Anki-safe namespaced form. Avoids double-prefixing when extractor filenames already contain the document prefix.",
+      "name": "image_namespace",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "filename"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Summary report across one or more catalogs: totals, figures, tables, noise, sync ratios.",
+      "name": "image_report",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_paths": {
+            "type": "string"
+          },
+          "collection_media_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "catalog_paths"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Check consistency between a catalog and Anki collection.media. If apply=True, executes transactional copying of missing files (under their namespaced name) to collection.media, skipping noise entries unless copy_noise=True.",
+      "name": "image_sync",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "apply": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_path": {
+            "type": "string"
+          },
+          "collection_media_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "copy_noise": {
+            "default": false,
+            "type": "boolean"
+          },
+          "only_filenames": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "catalog_path"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Sole writer of the Manifesto. Commits a batch's data transactionally. Requires a valid receipt (content_hash from validate_batch PASS). Parameters: deck_dir, batch_id, receipt_hash, qa_csv, cloze_csv (for receipt verification), new_ids (JSON array of IDEntry dicts), new_topics (JSON array of strings), new_tags (comma-separated), changelog_entries (JSON array), queue_updates (JSON array of strings to add).",
+      "name": "manifesto_commit",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "catalog_updates": {
+            "default": "[]",
+            "type": "string"
+          },
+          "changelog_entries": {
+            "default": "[]",
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "new_ids": {
+            "default": "[]",
+            "type": "string"
+          },
+          "new_tags": {
+            "default": "",
+            "type": "string"
+          },
+          "new_topics": {
+            "default": "[]",
+            "type": "string"
+          },
+          "qa_csv": {
+            "type": "string"
+          },
+          "queue_updates": {
+            "default": "[]",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "batch_id",
+          "receipt_hash",
+          "qa_csv",
+          "cloze_csv"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Import a legacy manifesto.md into manifesto.json format. Parses the markdown file and creates manifesto.json. deck_dir: folder containing the manifesto.md. manifesto_md_name: filename (default 'manifesto.md'). Reports all parsed sections and any parsing issues.",
+      "name": "manifesto_import",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "type": "string"
+          },
+          "manifesto_md_name": {
+            "default": "manifesto.md",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Initialize a new manifesto.json for a deck. deck_dir: absolute path to the deck folder. campo_estudo: e.g. 'Medicina::Neurologia::ELA'. deck_slug: short identifier (e.g. 'ela'). taxonomy_root: root tag (e.g. 'ELA'). Will NOT overwrite an existing manifesto.json.",
+      "name": "manifesto_init",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "campo_estudo": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "deck_slug": {
+            "type": "string"
+          },
+          "taxonomy_root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "campo_estudo",
+          "deck_slug",
+          "taxonomy_root"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Register the top-down total card budget plan for a topic into the Manifesto before drafting. Enforces that the TOTAL quantity of cards is planned before complete production, chunked strictly into batches of 20 (MAX_BATCH = 20).",
+      "name": "manifesto_plan_set",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_size": {
+            "default": 20,
+            "type": "integer"
+          },
+          "batches_planned": {
+            "type": "string"
+          },
+          "breakdown_json": {
+            "default": "{}",
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "rationale": {
+            "default": "",
+            "type": "string"
+          },
+          "total_planned": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "total_planned",
+          "batches_planned"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Read the current state of the Manifesto. deck_dir: absolute path to the deck folder. sections: comma-separated subset to return ('all', 'ids', 'topics', 'taxonomy', 'catalogs', 'changelog', 'queue', 'batches').",
+      "name": "manifesto_state",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "type": "string"
+          },
+          "sections": {
+            "default": "all",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Construct a standardized AnkiMBR <figure> tag with clinical caption. Ensures semantic container formatting (class='anki-figure') without inline styles. Supports optional title and context_link to connect the image/table to the card's clinical concept.",
+      "name": "media_figure_build",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "caption": {
+            "default": "",
+            "type": "string"
+          },
+          "context_link": {
+            "default": "",
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "item_type": {
+            "default": "figure",
+            "enum": [
+              "figure",
+              "table"
+            ],
+            "type": "string"
+          },
+          "style": {
+            "default": "",
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "filename"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "media"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Evaluate all gate checks for a pipeline phase without advancing the state. A PASS records the receipt for the batch (content_hash); a FAIL or INCOMPLETE invalidates any earlier receipt for that phase. Also returns read-only information_profiles (3-layer breakdown per row, excluded from receipt hash; length-only signals are advisory WARN, never blocking). deck_dir: deck folder (manifesto + anki_catalog.csv). batch_id: e.g. 'B07'. phase: drafted|curated|enriched|illustrated|validated. qa_csv / cloze_csv: full CSV texts. detail: 'compact' (default; diagnostics aggregated by code with affected rows) or 'full' (every check). Verdict: PASS | INCOMPLETE (a check could not run; no receipt) | FAIL.",
+      "name": "pipeline_gate_check",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "detail": {
+            "default": "compact",
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "qa_csv": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "batch_id",
+          "phase",
+          "qa_csv",
+          "cloze_csv"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Advance a batch through the pipeline state machine. deck_dir: absolute path to the deck folder. batch_id: e.g. 'B07'. Leaving a phase requires the receipt recorded by a PASS of pipeline_gate_check(phase=<current state>). receipt_hash is optional; if given it must equal that recorded receipt. Allowed transitions: started→drafted→curated→enriched→illustrated→validated→exported.",
+      "name": "pipeline_phase_advance",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "receipt_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "deck_dir",
+          "batch_id"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "One-shot batch review: runs every check over QA + Cloze CSVs and returns an aggregated report with fix hints, read-only information_profiles (separating retrieved target, necessary context, and optional explanation; semantic_review_required=True; no automatic QA->Cloze conversion; excluded from receipt hash), and the receipt (content_hash on PASS). If deck_dir is given and batch_id is registered, the gate is recorded like pipeline_gate_check. detail: 'compact' (default) or 'full'.",
+      "name": "review_batch",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "default": "B01",
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "deck_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "detail": {
+            "default": "compact",
+            "type": "string"
+          },
+          "phase": {
+            "default": "validated",
+            "type": "string"
+          },
+          "qa_csv": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "qa_csv",
+          "cloze_csv"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "pipeline",
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Sanitize a single card field: converts mathematical/clinical inequalities (< 10, > 50, <=, >=) to HTML entities (&lt;, &gt;, &le;, &ge;), bare & to &amp;, pipes to &#124;, newlines to <br>, while strictly preserving valid HTML tags (<b>, <i>, <code>, <span>, <ul>, <li>, <figure>, <img>). Returns sanitized string and list of fixes applied.",
+      "name": "sanitize_card_field",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "convert_markdown": {
+            "default": true,
+            "type": "boolean"
+          },
+          "is_images_field": {
+            "default": false,
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "mechanics"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate a TableSpec JSON string, render it to single-line HTML without inline styles, and run table checks. Returns {status: 'PASS'|'FAIL', html: str, diagnostics: list}.",
+      "name": "table_build",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "spec_json": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "spec_json"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "tables"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Convert GitHub-style markdown tables in text (with raw or escaped pipes, separated by newlines or <br>) into HTML tables. Returns {status: 'PASS'|'FAIL', text: str, tables_converted: int, diagnostics: list}.",
+      "name": "table_from_markdown",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "tables"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Check tags against the Manifesto taxonomy. tags: space-separated list. Returns ok/unregistered/depth/format per tag.",
+      "name": "taxonomy_check",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "deck_dir": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir",
+          "tags"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "state"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Calculate top-down total card budget for a topic based on source text and clinical decisions. Plans total cards upfront and chunks strictly into batches of 20 (MAX_BATCH = 20).",
+      "name": "topic_budget_plan",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_size": {
+            "default": 20,
+            "type": "integer"
+          },
+          "card_texts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "deck_dir": {
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deck_dir"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Calibrate topic flashcard budget via Sectional HCT with JEV System 1 & Must-Cover Matrix. Slices source into clinical sections, computes expected cards (EV), and partitions into batches <= 20.",
+      "name": "topic_triage_calibrate",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_size": {
+            "default": 20,
+            "type": "integer"
+          },
+          "deck_dir": {
+            "default": "",
+            "type": "string"
+          },
+          "domain": {
+            "default": "Medicina",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "type": "string"
+          },
+          "target_audience": {
+            "default": "R1_GENERALISTA",
+            "enum": [
+              "R1_GENERALISTA",
+              "ESPECIALISTA",
+              "FULL_COMPREHENSIVE"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "type": "string"
+          },
+          "use_jev": {
+            "default": true,
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "tags": [
+        "triage"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Full batch validation: runs every export-validator check over a complete QA CSV + Cloze CSV pair. Returns a ValidationReport with a verdict: PASS (content_hash = receipt), INCOMPLETE (some check could not run; see skipped; no receipt) or FAIL, plus read-only information_profiles (3-layer profile per row with note_type and row; excluded from receipt hash; length-only signals are advisory WARN). taxonomy_tags: space-separated registered tags. active_ids / current_batch_ids: comma-separated. catalog_filenames: comma-separated namespaced image filenames (needed to verify <img> sources; without it, image-bearing rows are reported as skipped).",
+      "name": "validate_batch",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "active_ids": {
+            "default": "",
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "catalog_filenames": {
+            "default": "",
+            "type": "string"
+          },
+          "cloze_csv": {
+            "type": "string"
+          },
+          "current_batch_ids": {
+            "default": "",
+            "type": "string"
+          },
+          "max_notes_length": {
+            "default": 1200,
+            "type": "integer"
+          },
+          "qa_csv": {
+            "type": "string"
+          },
+          "taxonomy_tags": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "qa_csv",
+          "cloze_csv"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate cloze syntax in a 'Sentença' field value. Checks: sequential c1..cN indices (operational cap 3; each index creates a separate Anki card with other indices visible), no nested deletions, boundary/length advisory WARN signals (length alone never proves atomicity and a single gap can hide a list). Returns: status, detected indices, card_count (= distinct cN), diagnostics, and information_profile (per-index 3-layer breakdown, candidate_items, 6-question checklist; read-only, no quality score).",
+      "name": "validate_cloze",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "row": {
+            "default": 0,
+            "type": "integer"
+          },
+          "sentence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentence"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Check cross-references in any field text. active_ids and current_batch_ids are comma-separated ID strings. XREF.BROKEN is emitted for IDs that do not resolve.",
+      "name": "validate_crossrefs",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "active_ids": {
+            "default": "",
+            "type": "string"
+          },
+          "current_batch_ids": {
+            "default": "",
+            "type": "string"
+          },
+          "field": {
+            "default": "",
+            "type": "string"
+          },
+          "row": {
+            "default": 0,
+            "type": "integer"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate the structural integrity of a QA or Cloze CSV block. Checks: header match, column count, raw pipes, raw newlines, HTML entities, forbidden tags, MathJax balance, and UTF-8 BOM. note_type must be 'QA' (7 fields) or 'CL' (6 fields).",
+      "name": "validate_csv_structure",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "csv_text": {
+            "type": "string"
+          },
+          "note_type": {
+            "enum": [
+              "QA",
+              "CL"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "csv_text",
+          "note_type"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate hints in a cloze sentence '{{cN::target::hint}}'. Checks: HINT.SYNONYM (high overlap), HINT.ELIMINATION (binary alternatives), HINT.ROOT_LEAK (target root in hint), HINT.FORMAT (empty hint).",
+      "name": "validate_hints",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "row": {
+            "default": 0,
+            "type": "integer"
+          },
+          "sentence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentence"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate the 'Imagens Relacionadas' HTML field. Checks: IMG.CAP_OVER (>3), IMG.PHANTOM (src not in catalog), IMG.NAMESPACE (invalid slug prefix), IMG.DUP_IN_CARD, IMG.STRUCTURE (<figure> malformed), IMG.CAPTION (empty/noisy). catalog_filenames: comma-separated list of valid namespaced filenames. Without it, a field containing <img> returns status INCOMPLETE (phantom unverifiable).",
+      "name": "validate_images_field",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_filenames": {
+            "default": "",
+            "type": "string"
+          },
+          "html": {
+            "type": "string"
+          },
+          "row": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "html"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate the 'Notas Adicionais' optional explanation field (same unit, authorized source; empty/short notes allowed with no minimum volume and variable depth). Checks: NOTE.METADATA (CRITICAL), NOTE.DUP_ANSWER_WARN (normalized HTML/entity/punctuation exact repeat), NOTE.EXAM_ONLY_WARN (exam mention without explanation), NOTE.LENGTH_WARN, NOTE.STYLE_WARN. Returns information_profile (note_type='QA', prompt_available=False limitation noted).",
+      "name": "validate_notes",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "default": "",
+            "type": "string"
+          },
+          "max_length": {
+            "default": 1200,
+            "type": "integer"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "row": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "notes"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate a QA pair (stem + answer), separating retrieved recall target from necessary stem context (stem context length is not extra recall; length-only checks emit WARN, never CRITICAL). Checks: QA.CARDINALITY (≥3 items → review unit, split independent recalls or move optional details to notes; no automatic QA->Cloze conversion), QA.YESNO, QA.MC_EMBED, QA.CONTEXT_WARN, QA.NUMBER_UNIT. Returns information_profile with candidate_items, evidence, and 6-question editorial checklist.",
+      "name": "validate_qa",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "enunciado": {
+            "type": "string"
+          },
+          "resposta": {
+            "type": "string"
+          },
+          "row": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enunciado",
+          "resposta"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate HTML table syntax, mobile screen constraints, and check for markdown table leaks. Returns {status: 'PASS'|'FAIL', diagnostics: list}.",
+      "name": "validate_tables_field",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "face": {
+            "default": false,
+            "type": "boolean"
+          },
+          "field": {
+            "default": "Notas Adicionais",
+            "type": "string"
+          },
+          "html": {
+            "type": "string"
+          },
+          "row": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "html"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "tables",
+        "validate"
+      ]
+    },
+    {
+      "annotations": null,
+      "description": "Validate the 'Etiquetas' field. Checks: TAG.FORMAT (spaces/invalid chars), TAG.DEPTH (>4 levels), TAG.UNREGISTERED (against provided taxonomy). taxonomy_tags: space-separated string of all registered tags (or empty to skip taxonomy check).",
+      "name": "validate_tags_field",
+      "output_schema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "parameters": {
+        "additionalProperties": false,
+        "properties": {
+          "row": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tags_field": {
+            "type": "string"
+          },
+          "taxonomy_tags": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tags_field"
+        ],
+        "type": "object"
+      },
+      "tags": [
+        "validate"
+      ]
+    }
+  ]
+}

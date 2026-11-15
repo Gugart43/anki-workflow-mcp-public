@@ -43,3 +43,46 @@ jobs:
 
       - name: Type check
         run: uv run --with mypy mypy src/ --ignore-missing-imports --no-error-summary
+
+  rust:
+    name: Rust & Parity (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --workspace --all-features
+
+      - name: Build oracle binary
+        run: cargo build -p anki-workflow-mcp
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Install Python dev dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Run differential parity tests
+        run: uv run pytest tests/differential/ -v --tb=short

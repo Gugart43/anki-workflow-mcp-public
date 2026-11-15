@@ -1,0 +1,83 @@
+{
+  "receipt_v1": [
+    {
+      "name": "empty_inputs",
+      "qa_csv": "",
+      "cloze_csv": ""
+    },
+    {
+      "name": "lf_basic",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQual o tratamento de 1ª linha?|Alteplase EV|Neurologia||||AVC\n",
+      "cloze_csv": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\nA {{c1::alteplase}} é indicada até {{c2::4,5 h}}.|Janela padrão|Neurologia|||AVC\n"
+    },
+    {
+      "name": "crlf_same_as_lf",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\r\nQual o tratamento de 1ª linha?|Alteplase EV|Neurologia||||AVC\r\n",
+      "cloze_csv": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\r\nA {{c1::alteplase}} é indicada até {{c2::4,5 h}}.|Janela padrão|Neurologia|||AVC\r\n"
+    },
+    {
+      "name": "pathological_cr_and_unicode",
+      "qa_csv": "Enunciado|Resposta\r\r\nDose ≥ 0,9 mg/kg (máx 90 mg) &#124; µg/dL|Sim — atenção à PA &lt; 185/110 mmHg\r",
+      "cloze_csv": "Sentença|Notas\n{{c1::\\frac{a}{b}::fração}} e – travessão\r\r\nSem newline final"
+    }
+  ],
+  "split_row": [
+    {
+      "name": "valid_qa_row_preserves_whitespace",
+      "line": "  Enunciado com espaço  | Resposta |Neurologia|Notas| |Ref|tag1 tag2\r\n",
+      "expected": 7
+    },
+    {
+      "name": "valid_cloze_row_with_escaped_pipe",
+      "line": "A {{c1::PA &#124; PAM}} deve ser controlada.|Nota|Neuro||Ref|tag\n",
+      "expected": 6
+    },
+    {
+      "name": "too_few_columns",
+      "line": "col1|col2|col3\r",
+      "expected": 7
+    },
+    {
+      "name": "too_many_columns_trailing_pipe",
+      "line": "a|b|c|d|e|f|g|\r\r\n",
+      "expected": 7
+    },
+    {
+      "name": "empty_line",
+      "line": "",
+      "expected": 6
+    }
+  ],
+  "count_batch_cards": [
+    {
+      "name": "empty_csvs",
+      "qa_csv": "",
+      "cloze_csv": "",
+      "batch_id": "B01"
+    },
+    {
+      "name": "headers_only",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\n",
+      "cloze_csv": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n",
+      "batch_id": "B01"
+    },
+    {
+      "name": "exact_limit_20_with_cloze_expansion_and_latex",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQ1|R1|N||||\nQ2|R2|N||||\nQ3|R3|N||||\nQ4|R4|N||||\nQ5|R5|N||||\nQ6|R6|N||||\nQ7|R7|N||||\nQ8|R8|N||||\nQ9|R9|N||||\nQ10|R10|N||||\nQ11|R11|N||||\nQ12|R12|N||||\nQ13|R13|N||||\nQ14|R14|N||||\nQ15|R15|N||||\n\nQ16|R16|N||||\n",
+      "cloze_csv": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n{{c1::\\frac{a}{b}::fração}} e {{c2::β}} e {{c1::repetido}}|n|N|||\n{{c1::único}}|n|N|||\nSem cloze aqui|n|N|||\n",
+      "batch_id": "B02-T1"
+    },
+    {
+      "name": "over_limit_suggests_ext",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQ1|R1|N||||\nQ2|R2|N||||\nQ3|R3|N||||\nQ4|R4|N||||\nQ5|R5|N||||\nQ6|R6|N||||\nQ7|R7|N||||\nQ8|R8|N||||\nQ9|R9|N||||\nQ10|R10|N||||\nQ11|R11|N||||\nQ12|R12|N||||\nQ13|R13|N||||\nQ14|R14|N||||\nQ15|R15|N||||\nQ16|R16|N||||\nQ17|R17|N||||\nQ18|R18|N||||\n",
+      "cloze_csv": "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\r\n{{c1::alfa}} {{c2::beta}} {{c3::gama}}|n|N|||\r\n",
+      "batch_id": "B03-T2"
+    },
+    {
+      "name": "over_limit_non_b_batch_id",
+      "qa_csv": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQ1|R1|N||||\nQ2|R2|N||||\nQ3|R3|N||||\nQ4|R4|N||||\nQ5|R5|N||||\nQ6|R6|N||||\nQ7|R7|N||||\nQ8|R8|N||||\nQ9|R9|N||||\nQ10|R10|N||||\nQ11|R11|N||||\nQ12|R12|N||||\nQ13|R13|N||||\nQ14|R14|N||||\nQ15|R15|N||||\nQ16|R16|N||||\nQ17|R17|N||||\nQ18|R18|N||||\nQ19|R19|N||||\nQ20|R20|N||||\nQ21|R21|N||||\n",
+      "cloze_csv": "",
+      "batch_id": "CUSTOM"
+    }
+  ]
+}
