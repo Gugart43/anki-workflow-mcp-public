@@ -9,6 +9,7 @@ pub mod draft_compile;
 pub mod draft_normalize;
 pub mod draft_patch;
 pub mod hints;
+mod html_security;
 pub mod id_leak;
 pub mod image_alias;
 pub mod images;
@@ -17,6 +18,8 @@ pub mod note_flow;
 pub mod notes;
 pub mod notes_render;
 pub mod qa;
+pub mod quality;
+pub mod quality_content;
 pub mod sanitize;
 pub mod study_field;
 pub mod table_render;
@@ -42,6 +45,12 @@ pub use note_flow::{NoteFlow, render_note_flow};
 pub use notes::{check_notes, check_notes_ext};
 pub use notes_render::render_extra_notes;
 pub use qa::check_qa;
+pub use quality::{
+    QUALITY_SCHEMA_VERSION, QualityBinding, QualityDimensions, QualityEvidence, QualityInput,
+    QualityObligation, QualityReport, QualityReview, QualitySource, evaluate_quality,
+    prepare_quality,
+};
+pub use quality_content::review_content;
 pub use sanitize::sanitize_field;
 pub use study_field::infer_campo_estudo;
 pub use table_render::{escape_cell, markdown_tables_to_html};

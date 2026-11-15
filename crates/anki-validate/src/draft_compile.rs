@@ -111,6 +111,17 @@ pub fn compile_drafts(
 
     for raw_draft in drafts {
         let card = normalize_draft(raw_draft)?;
+        fn unsafe_value(value: &Value) -> bool {
+            match value {
+                Value::String(text) => crate::html_security::has_unsafe_html(text),
+                Value::Array(items) => items.iter().any(unsafe_value),
+                Value::Object(items) => items.values().any(unsafe_value),
+                _ => false,
+            }
+        }
+        if unsafe_value(&card) {
+            return Err("Unsafe HTML attributes or active content in draft".to_owned());
+        }
         let obj = card
             .as_object()
             .ok_or_else(|| "Normalized draft must be a JSON object".to_string())?;
@@ -194,7 +205,51 @@ pub fn compile_drafts(
             tables_rendered += 1;
         }
 
-        let (clean_notes, _) = sanitize_field(&rendered_notes, false, true);
+        if let Some(tbls_val) = obj.get("tabelas_notas")
+            && !tbls_val.is_null()
+        {
+            let arr = tbls_val
+                .as_array()
+                .ok_or_else(|| "tabelas_notas must be an array".to_string())?;
+            for tbl_val in arr {
+                let spec = parse_table_spec(tbl_val)?;
+                let tbl_html = spec.render_html()?;
+                if rendered_notes.is_empty() {
+                    rendered_notes = tbl_html;
+                } else {
+                    rendered_notes = format!("{rendered_notes}<br>{tbl_html}");
+                }
+                tables_rendered += 1;
+            }
+        }
+
+        let (mut clean_notes, _) = sanitize_field(&rendered_notes, false, true);
+
+        if let Some(note_figs_val) = obj.get("figuras_notas")
+            && !note_figs_val.is_null()
+        {
+            let note_figs = match note_figs_val {
+                Value::Array(arr) => unique_figures(None, arr),
+                Value::Object(_) => unique_figures(Some(note_figs_val), &[]),
+                _ => return Err("figuras_notas must be an object, array, or null".to_string()),
+            };
+            if !note_figs.is_empty() {
+                let mut figs_buf = String::new();
+                for fig in &note_figs {
+                    let figure: crate::media_figure::MediaFigure =
+                        serde_json::from_value(fig.clone()).map_err(|e| e.to_string())?;
+                    figs_buf.push_str(&render_media_figure(&figure));
+                }
+                let (clean_note_figs, _) = sanitize_field(&figs_buf, true, false);
+                if !clean_note_figs.is_empty() {
+                    if clean_notes.is_empty() {
+                        clean_notes = clean_note_figs;
+                    } else {
+                        clean_notes = format!("{clean_notes}<br>{clean_note_figs}");
+                    }
+                }
+            }
+        }
 
         // 4. Format 'Imagens Relacionadas'
         let figs = unique_figures(
@@ -279,7 +334,7 @@ pub fn compile_drafts(
             let id_trimmed = id_val.trim();
             if !id_trimmed.is_empty() {
                 let card_id_tag = format!("id::{id_trimmed}");
-                if !tags_str.contains(&card_id_tag) {
+                if !tags_str.split_whitespace().any(|t| t == card_id_tag) {
                     if tags_str.is_empty() {
                         tags_str = card_id_tag;
                     } else {
@@ -333,6 +388,14 @@ pub fn compile_drafts(
 
     let qa_csv = write_csv(&QA_FIELDS, &qa_rows);
     let cloze_csv = write_csv(&CLOZE_FIELDS, &cloze_rows);
+    if qa_rows
+        .iter()
+        .chain(&cloze_rows)
+        .flatten()
+        .any(|field| crate::html_security::has_unsafe_html(field))
+    {
+        return Err("Unsafe HTML attributes or active content in compiled draft".to_owned());
+    }
 
     Ok(json!({
         "qa_csv": qa_csv,
@@ -393,5 +456,58 @@ mod tests {
             compile_drafts(&[draft], true, true, "").expect("legacy normalizes unknown type");
         assert_eq!(result["stats"]["qa_count"], 1);
         assert_eq!(result["stats"]["cloze_count"], 0);
+    }
+
+    #[test]
+    fn id_tag_check_uses_exact_token_matching() {
+        let draft = json!({
+            "tipo": "QA",
+            "id": "B01-QA-1",
+            "enunciado_ou_sentenca": "Pergunta sintética?",
+            "resposta": "Resposta sintética.",
+            "etiquetas": ["id::B01-QA-10", "Neurologia"]
+        });
+        let result = compile_drafts(&[draft], true, true, "").expect("compile should succeed");
+        let qa_csv = result["qa_csv"].as_str().unwrap();
+        let tags = qa_csv.lines().nth(1).unwrap().split('|').nth(6).unwrap();
+        assert!(tags.split_whitespace().any(|t| t == "id::B01-QA-10"));
+        assert!(tags.split_whitespace().any(|t| t == "id::B01-QA-1"));
+    }
+
+    #[test]
+    fn figuras_notas_and_tabelas_notas_render_safely_in_notes() {
+        let draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta sintética?",
+            "resposta": "Resposta sintética.",
+            "notas_adicionais": "Resumo clínico sintético.",
+            "tabelas_notas": [
+                {
+                    "caption": "Tabela A",
+                    "headers": ["Critério", "Valor"],
+                    "rows": [["X", "1"]]
+                },
+                {
+                    "caption": "Tabela B",
+                    "headers": ["Conduta", "Prazo"],
+                    "rows": [["Y", "Imediato"]]
+                }
+            ],
+            "figuras_notas": [
+                {
+                    "filename": "neuro_fluxo_sintetico.png",
+                    "caption": "Fluxo sintético de decisão diagnóstica.",
+                    "alt": "Diagrama de decisão diagnóstica sintético"
+                }
+            ]
+        });
+        let result = compile_drafts(&[draft], true, true, "").expect("compile should succeed");
+        assert_eq!(result["stats"]["tables_rendered"], 2);
+        let qa_csv = result["qa_csv"].as_str().unwrap();
+        let notes = qa_csv.lines().nth(1).unwrap().split('|').nth(3).unwrap();
+        assert!(notes.contains("<table>"));
+        assert!(notes.contains("<figure"));
+        assert!(notes.contains("<figcaption>"));
+        assert!(notes.contains("neuro_fluxo_sintetico.png"));
     }
 }

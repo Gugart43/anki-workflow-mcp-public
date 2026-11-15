@@ -1,6 +1,7 @@
 # ADR-006: Publicação Imutável de Artefatos, Projeções de Sistema de Arquivos, Retenção e Recuperação
 
-- **Status:** Aceito
+- **Status:** Aceito (Arquitetura-alvo — Não implementado no estágio atual)
+- **Status de Implementação:** Não implementado no código promovido. O modelo relacional de publicação imutável (`batches`, `artifact_versions`), projeções em disco em duas etapas e Garbage Collection em duas fases constituem a especificação arquitetural-alvo. No estágio atual, a publicação e persistência física em disco continuam executadas pelo servidor Python legado via `export_final`, que grava diretamente os arquivos CSV no disco sob locks de arquivo.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-005, Seções 3.2, 4.3 e 5.1 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-04, P-15, P-16
@@ -214,3 +215,10 @@ Para prevenir o consumo desenfreado de armazenamento sem comprometer a rastreabi
    - Teste gerando 10 versões sucessivas de um lote com limite de retenção de 3 versões, confirmando que as versões antigas transicionam para `TOMBSTONED` e subsequentemente para `PURGED`, enquanto a versão ativa permanece intacta.
 4. **Rollback Transacional:**
    - Teste aplicando `batch_rollback` para uma versão anterior e verificando que tanto o ponteiro no banco quanto os arquivos projetados no disco retornam ao conteúdo da versão desejada.
+
+---
+
+## Status de Implementação (Promoção Rust Primário)
+
+- **Implementado no estado atual:** O workspace Rust atual não possui dependências de persistência em disco ou SQLite; suas 6 ferramentas MCP são puramente em memória e não realizam escritas em disco.
+- **Arquitetura futura / Persistência legada:** O modelo relacional de publicação versionada imutável e projeções em duas etapas com status estruturado representa o plano de arquitetura de longo prazo para a versão 2. Na implantação promovida atual, a persistência de artefatos finais em disco permanece sob encargo exclusivo da ferramenta `export_final` no orquestrador Python.

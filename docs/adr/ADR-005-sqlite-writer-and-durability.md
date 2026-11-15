@@ -1,6 +1,7 @@
 # ADR-005: Arquitetura de Escrita em SQLite, Concorrência, Idempotência e Durabilidade
 
-- **Status:** Aceito
+- **Status:** Aceito (Arquitetura-alvo — Não implementado no estágio atual)
+- **Status de Implementação:** Não implementado no código promovido. A arquitetura de persistência relacional SQLite (`anki_workflow.db`), com modo WAL, conexão `SingleWriter`, transações `BEGIN IMMEDIATE`, tabela `operations` e durabilidade configurada, representa a especificação técnica de destino. No estágio atual, o workspace Rust opera 100% em memória sem dependência de SQLite (`rusqlite`/`sqlx`), e as operações duráveis em disco continuam executadas pelo servidor Python legado via arquivos soltos e `filelock`.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-006, Seções 1.3, 3.1 e 4.2 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-02, P-03, P-17, P-23
@@ -151,3 +152,10 @@ Para permitir a recuperação após falhas catastróficas sem criar riscos de co
    - Teste com encerramento forçado do processo (`SIGKILL`/abort forçado) imediatamente antes do commit de `manifesto_commit`, verificando recuperação atômica limpa e integridade via `PRAGMA integrity_check`.
 4. **Validação de Backup:**
    - Teste automatizado executando `rusqlite::backup` durante carga contínua de escrita e confirmando que o snapshot resultante é 100% íntegro e consistente com o digest do estado.
+
+---
+
+## Status de Implementação (Promoção Rust Primário)
+
+- **Implementado no estado atual:** Nenhuma dependência relacional ou SQLite está presente no workspace Rust atual (`Cargo.toml` não inclui `rusqlite`). O núcleo nativo Rust opera de forma puramente stateless em memória.
+- **Arquitetura futura / Persistência legada:** Esta ADR estabelece a especificação formal completa para quando a camada de persistência for portada para Rust na versão 2. Até que essa fase seja implementada, a durabilidade, concorrência e idempotência continuam sendo providas pelo ecossistema Python (`src/anki_mcp/`) por meio de arquivos JSON/CSV e travas de arquivo (`filelock`).

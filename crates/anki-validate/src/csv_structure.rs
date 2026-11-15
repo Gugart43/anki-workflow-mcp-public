@@ -222,9 +222,11 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
         }
 
         let tag_name = extract_tag_name(tag_raw);
-        if is_always_allowed_tag(&tag_name) || (is_images_only_tag(&tag_name) && is_images_field) {
+        let allows_figure_tags = is_images_field || field == "Notas Adicionais";
+        if is_always_allowed_tag(&tag_name) || (is_images_only_tag(&tag_name) && allows_figure_tags)
+        {
             // allowed
-        } else if is_images_only_tag(&tag_name) && !is_images_field {
+        } else if is_images_only_tag(&tag_name) && !allows_figure_tags {
             diags.push(
                 Diagnostic::new(
                     "FMT.TAG_FORBIDDEN",

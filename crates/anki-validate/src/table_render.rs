@@ -166,10 +166,7 @@ fn is_table_row(line: &str) -> bool {
         return false;
     }
     let lower = s.to_ascii_lowercase();
-    if lower.starts_with("<table") || lower.starts_with("<div") || lower.starts_with("<p") {
-        return false;
-    }
-    true
+    !(lower.starts_with("<table") || lower.starts_with("<div") || lower.starts_with("<p"))
 }
 
 fn normalize_cells(mut cells: Vec<String>, expected: usize) -> Vec<String> {

@@ -1,6 +1,7 @@
 # ADR-001: Migração para 100% Rust em produção e política de compatibilidade
 
-- **Status:** Aceito
+- **Status:** Aceito (Arquitetura-alvo / Parcialmente implementado)
+- **Status de Implementação:** Parcialmente implementado. O motor Rust foi promovido como componente primário em memória (6 ferramentas stdio puras), enquanto a persistência transacional em disco, manifesto, catálogos e sincronização de mídia permanecem executados pelo servidor Python legado.
 - **Data:** 2026-11-14
 - **Baseline Python congelada:** `d1d0098b367448c471303f7d0912996d50ac2f67` (`anki-workflow-mcp` v0.3.1)
 - **Plano de referência:** `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
@@ -48,3 +49,10 @@ Adotar a **Alternativa 3 (100% Rust em produção)**:
 - Discovery de contratos legados capturado em `contracts/legacy/tools.json`, `resources.json` e `prompts.json`.
 - Suíte diferencial (`tests/differential/` + `scripts/legacy-oracle/`) comparando `compute_receipt_v1`, `split_row` e `count_batch_cards` entre Python e Rust com 100% de equivalência nos fixtures golden.
 - CI multiplataforma (Linux + Windows) executando `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace` e `pytest`.
+
+---
+
+## Status de Implementação (Promoção Rust Primário)
+
+- **Implementado no estado atual:** O núcleo nativo Rust (`apps/anki-workflow-mcp` + crates `anki-domain`, `anki-parser`, `anki-validate`) foi promovido como componente primário de execução em memória, expondo exatamente 6 ferramentas puras via stdio (`cards_compile_drafts`, `review_batch_information`, `quality_prepare`, `quality_evaluate`, `batch_patch_draft` e `generation_contract_get`).
+- **Arquitetura futura / Persistência legada:** A visão de "100% Rust sem runtime Python" e a eliminação completa de dependência de Python em produção permanecem como arquitetura-alvo de longo prazo. No estágio atual, o ecossistema Python (`src/anki_mcp/server.py`) não atua apenas como oráculo diferencial: mantém o catálogo legado e as operações persistentes (manifesto, staging em disco, ledger de IDs, gerenciamento físico de mídia e exportação final). As seis ferramentas Rust não são um subconjunto estrito do catálogo Python.

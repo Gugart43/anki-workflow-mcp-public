@@ -113,6 +113,23 @@ pub fn normalize_draft(input: &Value) -> Result<Value, String> {
     };
     out.insert("tabela_notas".to_string(), tabela_val);
 
+    // 7b. Optional extra tables in Notas Adicionais
+    if let Some(tbls_raw) = obj.get("tabelas_notas")
+        && !tbls_raw.is_null()
+    {
+        let arr = tbls_raw
+            .as_array()
+            .ok_or_else(|| "Field 'tabelas_notas' must be an array or null".to_string())?;
+        let mut out_arr = Vec::with_capacity(arr.len());
+        for item in arr {
+            let m = item
+                .as_object()
+                .ok_or_else(|| "Each item in 'tabelas_notas' must be an object".to_string())?;
+            out_arr.push(normalize_table_spec(m)?);
+        }
+        out.insert("tabelas_notas".to_string(), Value::Array(out_arr));
+    }
+
     // 8. figura: MediaFigure | None = None
     let figura_val = match obj.get("figura") {
         None | Some(Value::Null) => Value::Null,
@@ -150,6 +167,29 @@ pub fn normalize_draft(input: &Value) -> Result<Value, String> {
         }
     }
     out.insert("figuras".to_string(), Value::Array(figuras_vec));
+
+    // 9b. Optional extra figures inside Notas Adicionais
+    if let Some(note_figs_raw) = obj.get("figuras_notas")
+        && !note_figs_raw.is_null()
+    {
+        let normalized_note_figs = match note_figs_raw {
+            Value::Array(arr) => {
+                let mut out_arr = Vec::with_capacity(arr.len());
+                for item in arr {
+                    let m = item.as_object().ok_or_else(|| {
+                        "Each item in 'figuras_notas' must be an object".to_string()
+                    })?;
+                    out_arr.push(normalize_media_figure(m)?);
+                }
+                Value::Array(out_arr)
+            }
+            Value::Object(m) => normalize_media_figure(m)?,
+            _ => {
+                return Err("Field 'figuras_notas' must be an object, array, or null".to_string());
+            }
+        };
+        out.insert("figuras_notas".to_string(), normalized_note_figs);
+    }
 
     // 10. referencias: list[str] | str = Field(default_factory=list) (alias: fonte)
     let refs_raw = obj.get("referencias").or_else(|| obj.get("fonte"));

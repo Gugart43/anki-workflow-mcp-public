@@ -1,6 +1,7 @@
 # ADR-003: Perfis de Compatibilidade (`legacy_compat` vs `strict_v2`)
 
-- **Status:** Aceito
+- **Status:** Aceito (Arquitetura-alvo / Parcialmente implementado)
+- **Status de Implementação:** Parcialmente implementado. No domínio Rust, os perfis `legacy_compat` e `strict_v2` estão formalizados. No motor `quality_v1`, `strict_v2` opera em memória sem teto fixo de 20 cartões e com avaliação individual por unidade de recuperação (QA e índices Cloze distintos). O bloqueio transacional de `manifesto_commit` e `export_final` via `ValidationAttestation` em SQLite permanece como arquitetura-alvo, pois essas operações com disco continuam sob a camada Python.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, Seção 1.4 e Seção 3.4 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 
@@ -33,3 +34,10 @@ Separar explicitamente dois perfis de execução:
 
 - Suíte diferencial (`tests/differential/test_rust_python_parity.py`) validando paridade 1:1 no modo `legacy_compat`.
 - Testes negativos de gate em `anki-state` / `anki-application` garantindo bloqueio de bypass no modo `strict_v2`.
+
+---
+
+## Status de Implementação (Promoção Rust Primário)
+
+- **Implementado no estado atual:** A enumeração `CompatibilityProfile` está definida em `crates/anki-domain` com suporte a `LegacyCompat` e `StrictV2`. O motor de revisão `quality_v1` em `crates/anki-validate` adota os princípios de `strict_v2`, eliminando o teto fixo de 20 cartões e avaliando cada unidade de recuperação (cada QA e cada índice Cloze individualmente).
+- **Arquitetura futura / Persistência legada:** As garantias de `strict_v2` atreladas à persistência em SQLite (exigência de `ValidationAttestation` para `manifesto_commit` e `export_final`, bloqueio no ledger relacional) permanecem como especificação arquitetural-alvo. As operações de manifesto e exportação continuam sendo executadas pelo orquestrador Python com seus mecanismos históricos de bloqueio de arquivo.
