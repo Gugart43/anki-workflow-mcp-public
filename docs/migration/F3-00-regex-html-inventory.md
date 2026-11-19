@@ -5,7 +5,7 @@
 - **Baseline de Código Python:** `d1d0098b367448c471303f7d0912996d50ac2f67` (`anki-workflow-mcp` v0.3.1)
 - **Escopo Primário:** `src/anki_mcp/checks/*.py` e `src/anki_mcp/core/*.py`
 - **Escopo Secundário Mapeado:** `src/anki_mcp/tools/*.py` (Unicode e CamelCase regexes)
-- **Ressalva de Auditoria Relacionada:** P-07 (`PARECER_TECNICO_PLANO_MESTRE_ANKI_RUST_V2.md`)
+- **Ressalva de Auditoria Relacionada:** P-07
 
 ---
 

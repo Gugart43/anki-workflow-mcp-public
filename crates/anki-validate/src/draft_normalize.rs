@@ -1,553 +1,566 @@
-use serde_json::{Map, Value};
+use std::collections::HashSet;
 
-pub fn normalize_draft(input: &Value) -> Result<Value, String> {
-    let obj = input
-        .as_object()
-        .ok_or_else(|| "CardDraft input must be a JSON object".to_string())?;
+use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
-    let mut out = Map::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub enum CardTipo {
+    QA,
+    CLOZE,
+}
 
-    // 1. id: str | None = None
-    let id_val = match obj.get("id") {
-        None | Some(Value::Null) => Value::Null,
-        Some(Value::String(s)) => Value::String(s.clone()),
-        Some(_) => return Err("Field 'id' must be a string or null".to_string()),
-    };
-    out.insert("id".to_string(), id_val);
-
-    // 2. tipo: Literal["QA", "CLOZE"] (alias: note_type)
-    let tipo_str = if let Some(v) = obj.get("tipo") {
-        let s = v
-            .as_str()
-            .ok_or_else(|| "Field 'tipo' must be a string".to_string())?;
-        let upper = s.trim().to_uppercase();
-        if upper == "CLOZE" || upper == "CL" {
-            "CLOZE"
-        } else {
-            "QA"
+impl<'de> Deserialize<'de> for CardTipo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        match raw.trim().to_uppercase().as_str() {
+            "QA" => Ok(Self::QA),
+            "CLOZE" | "CL" => Ok(Self::CLOZE),
+            _ => Err(serde::de::Error::custom(format!(
+                "Unsupported draft tipo: '{raw}' (expected 'QA' or 'CLOZE')"
+            ))),
         }
-    } else if let Some(v) = obj.get("note_type") {
-        let raw = match v {
-            Value::Null => "",
-            Value::String(s) => s.as_str(),
-            _ => return Err("Field 'note_type' must be a string or null".to_string()),
-        };
-        let upper = raw.trim().to_uppercase();
-        if upper == "CLOZE" || upper == "CL" {
-            "CLOZE"
-        } else {
-            "QA"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum StringOrVec {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Default for StringOrVec {
+    fn default() -> Self {
+        Self::Many(Vec::new())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawTableSpec {
+    #[serde(default)]
+    pub caption: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+}
+
+impl RawTableSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.headers.is_empty() {
+            return Err("TableSpec.headers must be a non-empty string array".to_string());
         }
-    } else {
-        return Err("Missing required field 'tipo'".to_string());
-    };
-    out.insert("tipo".to_string(), Value::String(tipo_str.to_string()));
+        if self.rows.iter().any(|row| row.len() != self.headers.len()) {
+            return Err("TableSpec.rows must match the headers column count".to_string());
+        }
+        Ok(())
+    }
+}
 
-    // 3. enunciado_ou_sentenca: str (aliases: pergunta, sentenca, enunciado)
-    let enunciado_val = obj
-        .get("enunciado_ou_sentenca")
-        .or_else(|| obj.get("pergunta"))
-        .or_else(|| obj.get("sentenca"))
-        .or_else(|| obj.get("enunciado"))
-        .ok_or_else(|| "Missing required field 'enunciado_ou_sentenca'".to_string())?;
-    let enunciado_str = enunciado_val
-        .as_str()
-        .ok_or_else(|| "Field 'enunciado_ou_sentenca' must be a string".to_string())?;
-    out.insert(
-        "enunciado_ou_sentenca".to_string(),
-        Value::String(enunciado_str.to_string()),
-    );
+fn default_item_type() -> String {
+    "figure".to_string()
+}
 
-    // 4. resposta: str | None = None
-    let resposta_val = match obj.get("resposta") {
-        None | Some(Value::Null) => Value::Null,
-        Some(Value::String(s)) => Value::String(s.clone()),
-        Some(_) => return Err("Field 'resposta' must be a string or null".to_string()),
-    };
-    out.insert("resposta".to_string(), resposta_val);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawMediaFigure {
+    pub filename: String,
+    #[serde(default)]
+    pub caption: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub context_link: String,
+    #[serde(default = "default_item_type")]
+    pub item_type: String,
+    #[serde(default)]
+    pub style: String,
+    #[serde(default)]
+    pub caption_style: String,
+}
 
-    // 5. campo_estudo: str = ""
-    let campo_val = if let Some(v) = obj.get("campo_estudo") {
-        v.as_str()
-            .ok_or_else(|| "Field 'campo_estudo' must be a string".to_string())?
-            .to_string()
-    } else {
-        let mut found = String::new();
-        for alias in [
-            "campo_de_estudo",
-            "campo",
-            "area",
-            "study_field",
-            "field_of_study",
-            "especialidade",
-        ] {
-            if let Some(v) = obj.get(alias)
-                && is_truthy_json(v)
-            {
-                found = v
-                    .as_str()
-                    .ok_or_else(|| format!("Field '{alias}' must be a string"))?
-                    .to_string();
+impl RawMediaFigure {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.item_type != "figure" && self.item_type != "table" {
+            return Err("Field 'MediaFigure.item_type' must be figure or table".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum OneOrManyFigures {
+    One(RawMediaFigure),
+    Many(Vec<RawMediaFigure>),
+}
+
+impl OneOrManyFigures {
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::One(fig) => fig.validate(),
+            Self::Many(figs) => figs.iter().try_for_each(RawMediaFigure::validate),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawNoteSource {
+    pub fonte: String,
+    pub trecho: String,
+    pub pagina: std::num::NonZeroU64,
+}
+
+impl RawNoteSource {
+    pub fn normalize(&mut self) -> Result<(), String> {
+        self.fonte = self.fonte.trim().to_string();
+        if self.fonte.is_empty() {
+            return Err("NoteSource.fonte must not be empty".to_string());
+        }
+        self.trecho = self.trecho.trim().to_string();
+        if self.trecho.is_empty() {
+            return Err("NoteSource.trecho must not be empty".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawFlowNode {
+    pub id: String,
+    pub texto: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawFlowEdge {
+    pub origem: String,
+    pub destino: String,
+    pub rotulo: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RawNoteFlow {
+    pub inicio: String,
+    pub nos: Vec<RawFlowNode>,
+    #[serde(default)]
+    pub arestas: Vec<RawFlowEdge>,
+}
+
+impl RawNoteFlow {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.nos.is_empty() {
+            return Err("NoteFlow.nos must not be empty".to_string());
+        }
+        let mut ids = HashSet::with_capacity(self.nos.len());
+        for node in &self.nos {
+            if node.id.is_empty() {
+                return Err("FlowNode.id is required".to_string());
+            }
+            if node.texto.is_empty() {
+                return Err("FlowNode.texto is required".to_string());
+            }
+            if !ids.insert(node.id.as_str()) {
+                return Err("Duplicate flow node IDs".to_string());
+            }
+        }
+        if !ids.contains(self.inicio.as_str()) {
+            return Err("Flow requires unique node IDs and a valid inicio".to_string());
+        }
+
+        let mut edge_set = HashSet::with_capacity(self.arestas.len());
+        for edge in &self.arestas {
+            if edge.rotulo.is_empty() {
+                return Err("FlowEdge.rotulo is required".to_string());
+            }
+            if !ids.contains(edge.origem.as_str()) || !ids.contains(edge.destino.as_str()) {
+                return Err("Flow edge refers to a missing node".to_string());
+            }
+            if !edge_set.insert((
+                edge.origem.as_str(),
+                edge.destino.as_str(),
+                edge.rotulo.as_str(),
+            )) {
+                return Err("Duplicate flow edges".to_string());
+            }
+        }
+
+        let mut reached = HashSet::from([self.inicio.as_str()]);
+        loop {
+            let prior = reached.len();
+            for edge in &self.arestas {
+                if reached.contains(edge.origem.as_str()) {
+                    reached.insert(edge.destino.as_str());
+                }
+            }
+            if prior == reached.len() {
                 break;
             }
         }
-        found
-    };
-    out.insert("campo_estudo".to_string(), Value::String(campo_val));
-
-    // 6. notas_adicionais: ExtraNotes | str = Field(default_factory=ExtraNotes) (alias: notas)
-    let notas_raw = obj.get("notas_adicionais").or_else(|| obj.get("notas"));
-    let notas_val = match notas_raw {
-        None => default_extra_notes(),
-        Some(Value::String(s)) => Value::String(s.clone()),
-        Some(Value::Object(m)) => normalize_extra_notes(m)?,
-        Some(_) => return Err("Field 'notas_adicionais' must be an object or string".to_string()),
-    };
-    out.insert("notas_adicionais".to_string(), notas_val);
-
-    // 7. tabela_notas: TableSpec | dict[str, Any] | None = None
-    let tabela_val = match obj.get("tabela_notas") {
-        None | Some(Value::Null) => Value::Null,
-        Some(Value::Object(m)) => normalize_table_spec(m)?,
-        Some(_) => return Err("Field 'tabela_notas' must be an object or null".to_string()),
-    };
-    out.insert("tabela_notas".to_string(), tabela_val);
-
-    // 7b. Optional extra tables in Notas Adicionais
-    if let Some(tbls_raw) = obj.get("tabelas_notas")
-        && !tbls_raw.is_null()
-    {
-        let arr = tbls_raw
-            .as_array()
-            .ok_or_else(|| "Field 'tabelas_notas' must be an array or null".to_string())?;
-        let mut out_arr = Vec::with_capacity(arr.len());
-        for item in arr {
-            let m = item
-                .as_object()
-                .ok_or_else(|| "Each item in 'tabelas_notas' must be an object".to_string())?;
-            out_arr.push(normalize_table_spec(m)?);
+        if reached != ids {
+            return Err("Every flow node must be reachable from inicio".to_string());
         }
-        out.insert("tabelas_notas".to_string(), Value::Array(out_arr));
+        Ok(())
     }
+}
 
-    // 8. figura: MediaFigure | None = None
-    let figura_val = match obj.get("figura") {
-        None | Some(Value::Null) => Value::Null,
-        Some(Value::Object(m)) => normalize_media_figure(m)?,
-        Some(_) => return Err("Field 'figura' must be an object or null".to_string()),
-    };
-    out.insert("figura".to_string(), figura_val);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteBlockKind {
+    Paragrafo,
+    Lista,
+    Alerta,
+    Tabela,
+    Fluxograma,
+}
 
-    // 9. figuras: list[MediaFigure] = Field(default_factory=list)
-    let mut figuras_vec: Vec<Value> = match obj.get("figuras") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(arr)) => {
-            let mut out_arr = Vec::with_capacity(arr.len());
-            for item in arr {
-                let m = item
-                    .as_object()
-                    .ok_or_else(|| "Each item in 'figuras' must be an object".to_string())?;
-                out_arr.push(normalize_media_figure(m)?);
-            }
-            out_arr
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RawNoteBlock {
+    pub tipo: NoteBlockKind,
+    #[serde(default)]
+    pub titulo: String,
+    #[serde(default)]
+    pub texto: String,
+    #[serde(default)]
+    pub itens: Vec<String>,
+    #[serde(default)]
+    pub tabela: Option<RawTableSpec>,
+    #[serde(default)]
+    pub fluxograma: Option<RawNoteFlow>,
+    pub fontes: Vec<RawNoteSource>,
+}
+
+impl RawNoteBlock {
+    pub fn normalize(&mut self) -> Result<(), String> {
+        if let Some(table) = &self.tabela {
+            table.validate()?;
         }
-        Some(_) => return Err("Field 'figuras' must be an array".to_string()),
-    };
+        if let Some(flow) = &self.fluxograma {
+            flow.validate()?;
+        }
+        if self.fontes.is_empty() {
+            return Err("NoteBlock.fontes must contain at least one source".to_string());
+        }
+        for source in &mut self.fontes {
+            source.normalize()?;
+        }
+        let has_table = self.tabela.is_some();
+        let has_flow = self.fluxograma.is_some();
+        let valid = match self.tipo {
+            NoteBlockKind::Paragrafo | NoteBlockKind::Alerta => {
+                !self.texto.trim().is_empty() && self.itens.is_empty() && !has_table && !has_flow
+            }
+            NoteBlockKind::Lista => {
+                !self.itens.is_empty()
+                    && self.itens.iter().all(|s| !s.trim().is_empty())
+                    && self.texto.is_empty()
+                    && !has_table
+                    && !has_flow
+            }
+            NoteBlockKind::Tabela => {
+                has_table && !has_flow && self.texto.is_empty() && self.itens.is_empty()
+            }
+            NoteBlockKind::Fluxograma => {
+                has_flow && !has_table && self.texto.is_empty() && self.itens.is_empty()
+            }
+        };
+        if !valid {
+            return Err(
+                "Block content must match tipo; empty or competing payloads are invalid"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+}
 
-    for img_alias in ["images", "imagens_relacionadas", "imagens"] {
-        if let Some(raw_imgs) = obj.get(img_alias) {
-            let parsed = crate::image_alias::parse_images_html_to_figures(raw_imgs);
-            for fig in parsed {
-                if let Some(m) = fig.as_object() {
-                    figuras_vec.push(normalize_media_figure(m)?);
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RawExtraNotes {
+    #[serde(default)]
+    pub fisiopatologia: Option<String>,
+    #[serde(default)]
+    pub raciocinio_clinico: Option<String>,
+    #[serde(default)]
+    pub armadilhas_diferenciais: Option<String>,
+    #[serde(default)]
+    pub correlacao_visual: Option<String>,
+    #[serde(default)]
+    pub tabela: Option<RawTableSpec>,
+    #[serde(default)]
+    pub texto_livre: Option<String>,
+    #[serde(default)]
+    pub blocos: Vec<RawNoteBlock>,
+}
+
+impl RawExtraNotes {
+    pub fn normalize(&mut self) -> Result<(), String> {
+        if let Some(table) = &self.tabela {
+            table.validate()?;
+        }
+        for block in &mut self.blocos {
+            block.normalize()?;
+        }
+        Ok(())
+    }
+}
+
+const LEGACY_EXTRA_NOTES_KEYS: &[&str] = &[
+    "fisiopatologia",
+    "raciocinio_clinico",
+    "armadilhas_diferenciais",
+    "correlacao_visual",
+    "texto_livre",
+    "tabela",
+];
+
+fn has_populated_legacy_key(map: &serde_json::Map<String, Value>) -> bool {
+    LEGACY_EXTRA_NOTES_KEYS
+        .iter()
+        .any(|k| matches!(map.get(*k), Some(v) if !v.is_null()))
+}
+
+fn has_any_legacy_key(map: &serde_json::Map<String, Value>) -> bool {
+    map.keys()
+        .any(|k| LEGACY_EXTRA_NOTES_KEYS.contains(&k.as_str()))
+}
+
+fn has_canonical_only_block(map: &serde_json::Map<String, Value>) -> bool {
+    let Some(Value::Array(blocos)) = map.get("blocos") else {
+        return false;
+    };
+    blocos.iter().any(|b_val| {
+        let Some(b) = b_val.as_object() else {
+            return false;
+        };
+        let tipo = b.get("tipo").and_then(Value::as_str);
+        matches!(tipo, Some("callout" | "chave_valor" | "figura"))
+            || b.contains_key("colapsavel")
+            || b.contains_key("ordenada")
+            || b.contains_key("spec")
+            || b.contains_key("fluxo")
+            || b.contains_key("variante")
+            || b.contains_key("rotulo")
+            || b.contains_key("pares")
+    })
+}
+
+fn has_legacy_only_block(map: &serde_json::Map<String, Value>) -> bool {
+    let Some(Value::Array(blocos)) = map.get("blocos") else {
+        return false;
+    };
+    blocos.iter().any(|b_val| {
+        let Some(b) = b_val.as_object() else {
+            return false;
+        };
+        let tipo = b.get("tipo").and_then(Value::as_str);
+        tipo == Some("alerta")
+            || b.contains_key("fontes")
+            || b.contains_key("fluxograma")
+            || (b.contains_key("itens") && b.contains_key("texto"))
+            || (tipo == Some("tabela") && b.contains_key("tabela"))
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum RawExtraNotesInput {
+    Text(String),
+    Canonical(crate::note_model::NoteDocument),
+    Legacy(RawExtraNotes),
+}
+
+impl Default for RawExtraNotesInput {
+    fn default() -> Self {
+        Self::Legacy(RawExtraNotes::default())
+    }
+}
+
+impl Serialize for RawExtraNotesInput {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Text(text) => text.serialize(serializer),
+            Self::Canonical(doc) => doc.serialize(serializer),
+            Self::Legacy(notes) => notes.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawExtraNotesInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let val = Value::deserialize(deserializer)?;
+        match val {
+            Value::String(s) => Ok(Self::Text(s)),
+            Value::Object(map) => {
+                let has_top_fontes = map.contains_key("fontes");
+                let has_canonical_blocks = has_canonical_only_block(&map);
+                let has_legacy_blocks = has_legacy_only_block(&map);
+                let blocos_non_empty =
+                    matches!(map.get("blocos"), Some(Value::Array(arr)) if !arr.is_empty());
+                if (has_populated_legacy_key(&map)
+                    && (has_top_fontes
+                        || has_canonical_blocks
+                        || (blocos_non_empty && !has_legacy_blocks)))
+                    || (has_legacy_blocks && has_top_fontes)
+                {
+                    return Err(serde::de::Error::custom(
+                        "Field 'notas_adicionais' cannot mix canonical fields ('fontes'/v2 blocks) with legacy fields",
+                    ));
+                }
+
+                if has_any_legacy_key(&map)
+                    || has_legacy_blocks
+                    || (!map.contains_key("blocos") && !has_top_fontes)
+                {
+                    let legacy: RawExtraNotes = serde_json::from_value(Value::Object(map))
+                        .map_err(serde::de::Error::custom)?;
+                    Ok(Self::Legacy(legacy))
                 } else {
-                    figuras_vec.push(fig);
+                    let doc: crate::note_model::NoteDocument =
+                        serde_json::from_value(Value::Object(map))
+                            .map_err(serde::de::Error::custom)?;
+                    doc.validate().map_err(serde::de::Error::custom)?;
+                    Ok(Self::Canonical(doc))
                 }
             }
+            Value::Null => Ok(Self::Legacy(RawExtraNotes::default())),
+            other => Err(serde::de::Error::custom(format!(
+                "Field 'notas_adicionais' must be an object, string, or null (received {})",
+                json_type_name(&other)
+            ))),
         }
     }
-    out.insert("figuras".to_string(), Value::Array(figuras_vec));
-
-    // 9b. Optional extra figures inside Notas Adicionais
-    if let Some(note_figs_raw) = obj.get("figuras_notas")
-        && !note_figs_raw.is_null()
-    {
-        let normalized_note_figs = match note_figs_raw {
-            Value::Array(arr) => {
-                let mut out_arr = Vec::with_capacity(arr.len());
-                for item in arr {
-                    let m = item.as_object().ok_or_else(|| {
-                        "Each item in 'figuras_notas' must be an object".to_string()
-                    })?;
-                    out_arr.push(normalize_media_figure(m)?);
-                }
-                Value::Array(out_arr)
-            }
-            Value::Object(m) => normalize_media_figure(m)?,
-            _ => {
-                return Err("Field 'figuras_notas' must be an object, array, or null".to_string());
-            }
-        };
-        out.insert("figuras_notas".to_string(), normalized_note_figs);
-    }
-
-    // 10. referencias: list[str] | str = Field(default_factory=list) (alias: fonte)
-    let refs_raw = obj.get("referencias").or_else(|| obj.get("fonte"));
-    let refs_val = normalize_str_or_str_list(refs_raw, "referencias")?;
-    out.insert("referencias".to_string(), refs_val);
-
-    // 11. etiquetas: list[str] | str = Field(default_factory=list) (alias: tags)
-    let tags_raw = obj.get("etiquetas").or_else(|| obj.get("tags"));
-    let tags_val = normalize_str_or_str_list(tags_raw, "etiquetas")?;
-    out.insert("etiquetas".to_string(), tags_val);
-
-    Ok(Value::Object(out))
 }
 
-fn is_truthy_json(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|x| x != 0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(m) => !m.is_empty(),
+fn json_type_name(val: &Value) -> &'static str {
+    match val {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
-fn default_extra_notes() -> Value {
-    let mut m = Map::new();
-    for field in [
-        "fisiopatologia",
-        "raciocinio_clinico",
-        "armadilhas_diferenciais",
-        "correlacao_visual",
-        "tabela",
-        "texto_livre",
-    ] {
-        m.insert(field.to_string(), Value::Null);
-    }
-    m.insert("blocos".to_string(), Value::Array(Vec::new()));
-    Value::Object(m)
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-fn normalize_extra_notes(input: &Map<String, Value>) -> Result<Value, String> {
-    let mut m = default_extra_notes().as_object().cloned().expect("object");
-    for field in [
-        "fisiopatologia",
-        "raciocinio_clinico",
-        "armadilhas_diferenciais",
-        "correlacao_visual",
-        "texto_livre",
-    ] {
-        if let Some(value) = input.get(field) {
-            if !value.is_null() && !value.is_string() {
-                return Err(format!(
-                    "Field 'notas_adicionais.{field}' must be a string or null"
-                ));
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct RawCardDraft {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(alias = "note_type")]
+    pub tipo: CardTipo,
+    #[serde(alias = "pergunta", alias = "sentenca", alias = "enunciado")]
+    pub enunciado_ou_sentenca: String,
+    #[serde(default)]
+    pub resposta: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_null_default",
+        alias = "campo_de_estudo",
+        alias = "campo",
+        alias = "area",
+        alias = "study_field",
+        alias = "field_of_study",
+        alias = "especialidade"
+    )]
+    pub campo_estudo: String,
+    #[serde(default, alias = "notas")]
+    pub notas_adicionais: RawExtraNotesInput,
+    #[serde(default)]
+    pub tabela_notas: Option<RawTableSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tabelas_notas: Option<Vec<RawTableSpec>>,
+    #[serde(default)]
+    pub figura: Option<RawMediaFigure>,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub figuras: Vec<RawMediaFigure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub figuras_notas: Option<OneOrManyFigures>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_null_default",
+        alias = "fonte"
+    )]
+    pub referencias: StringOrVec,
+    #[serde(default, deserialize_with = "deserialize_null_default", alias = "tags")]
+    pub etiquetas: StringOrVec,
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub images: Option<Value>,
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub imagens_relacionadas: Option<Value>,
+    #[serde(default, skip_serializing)]
+    #[schemars(skip)]
+    pub imagens: Option<Value>,
+}
+
+impl RawCardDraft {
+    pub fn normalize(mut self) -> Result<Self, String> {
+        match &mut self.notas_adicionais {
+            RawExtraNotesInput::Legacy(notes) => {
+                notes.normalize()?;
             }
-            m.insert(field.to_string(), value.clone());
+            RawExtraNotesInput::Canonical(doc) => {
+                doc.validate().map_err(|e| e.to_string())?;
+            }
+            RawExtraNotesInput::Text(_) => {}
         }
-    }
-    if let Some(value) = input.get("tabela") {
-        m.insert(
-            "tabela".to_string(),
-            if let Some(table) = value.as_object() {
-                normalize_table_spec(table)?
-            } else if value.is_null() {
-                Value::Null
-            } else {
-                return Err("Field 'notas_adicionais.tabela' must be an object or null".to_string());
-            },
-        );
-    }
-    if let Some(value) = input.get("blocos") {
-        let blocks = value
-            .as_array()
-            .ok_or_else(|| "Field 'notas_adicionais.blocos' must be an array".to_string())?;
-        let normalized = blocks
-            .iter()
-            .map(normalize_note_block)
-            .collect::<Result<Vec<_>, _>>()?;
-        m.insert("blocos".to_string(), Value::Array(normalized));
-    }
-    Ok(Value::Object(m))
-}
-
-fn normalize_note_block(value: &Value) -> Result<Value, String> {
-    let input = value
-        .as_object()
-        .ok_or_else(|| "Each item in 'blocos' must be an object".to_string())?;
-    let tipo = input
-        .get("tipo")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "NoteBlock.tipo is required".to_string())?;
-    if !["paragrafo", "lista", "alerta", "tabela", "fluxograma"].contains(&tipo) {
-        return Err(format!("Unsupported NoteBlock tipo: {tipo}"));
-    }
-    let mut block = Map::new();
-    block.insert("tipo".to_string(), Value::String(tipo.to_string()));
-    for key in ["titulo", "texto"] {
-        let val = input
-            .get(key)
-            .cloned()
-            .unwrap_or_else(|| Value::String(String::new()));
-        if !val.is_string() {
-            return Err(format!("NoteBlock.{key} must be a string"));
+        if let Some(table) = &self.tabela_notas {
+            table.validate()?;
         }
-        block.insert(key.to_string(), val);
-    }
-    let itens = input.get("itens").cloned().unwrap_or_else(json_array);
-    if !itens
-        .as_array()
-        .is_some_and(|v| v.iter().all(Value::is_string))
-    {
-        return Err("NoteBlock.itens must be a string array".to_string());
-    }
-    block.insert("itens".to_string(), itens);
-    for key in ["tabela", "fluxograma"] {
-        let val = match input.get(key) {
-            None | Some(Value::Null) => Value::Null,
-            Some(Value::Object(obj)) if key == "tabela" => normalize_table_spec(obj)?,
-            Some(Value::Object(obj)) => normalize_note_flow(obj)?,
-            _ => return Err(format!("NoteBlock.{key} must be an object or null")),
-        };
-        block.insert(key.to_string(), val);
-    }
-    let sources = input
-        .get("fontes")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "NoteBlock.fontes must be an array".to_string())?;
-    if sources.is_empty() {
-        return Err("NoteBlock.fontes must contain at least one source".to_string());
-    }
-    block.insert(
-        "fontes".to_string(),
-        Value::Array(
-            sources
-                .iter()
-                .map(normalize_note_source)
-                .collect::<Result<_, _>>()?,
-        ),
-    );
-    let text = block["texto"].as_str().unwrap_or("");
-    let items = block["itens"].as_array().expect("normalized items");
-    let table = !block["tabela"].is_null();
-    let flow = !block["fluxograma"].is_null();
-    let valid = match tipo {
-        "paragrafo" | "alerta" => !text.trim().is_empty() && items.is_empty() && !table && !flow,
-        "lista" => {
-            !items.is_empty()
-                && items
-                    .iter()
-                    .all(|x| x.as_str().is_some_and(|s| !s.trim().is_empty()))
-                && text.is_empty()
-                && !table
-                && !flow
-        }
-        "tabela" => table && !flow && text.is_empty() && items.is_empty(),
-        "fluxograma" => flow && !table && text.is_empty() && items.is_empty(),
-        _ => false,
-    };
-    if !valid {
-        return Err(
-            "Block content must match tipo; empty or competing payloads are invalid".to_string(),
-        );
-    }
-    Ok(Value::Object(block))
-}
-
-fn json_array() -> Value {
-    Value::Array(Vec::new())
-}
-
-fn normalize_note_source(value: &Value) -> Result<Value, String> {
-    let input = value.as_object().ok_or("NoteSource must be an object")?;
-    let mut out = Map::new();
-    for key in ["fonte", "trecho"] {
-        let text = input
-            .get(key)
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("NoteSource.{key} is required"))?
-            .trim();
-        if text.is_empty() {
-            return Err(format!("NoteSource.{key} must not be empty"));
-        }
-        out.insert(key.to_string(), Value::String(text.to_string()));
-    }
-    let page = input
-        .get("pagina")
-        .and_then(Value::as_u64)
-        .filter(|&n| n >= 1)
-        .ok_or("NoteSource.pagina must be >= 1")?;
-    out.insert("pagina".to_string(), Value::from(page));
-    Ok(Value::Object(out))
-}
-
-fn normalize_note_flow(input: &Map<String, Value>) -> Result<Value, String> {
-    let start = input
-        .get("inicio")
-        .and_then(Value::as_str)
-        .ok_or("NoteFlow.inicio is required")?;
-    let nodes = input
-        .get("nos")
-        .and_then(Value::as_array)
-        .ok_or("NoteFlow.nos is required")?;
-    let edges = input.get("arestas").cloned().unwrap_or_else(json_array);
-    if !edges.is_array() {
-        return Err("NoteFlow.arestas must be an array".to_string());
-    }
-    if nodes.is_empty() {
-        return Err("NoteFlow.nos must not be empty".to_string());
-    }
-    let mut ids = std::collections::HashSet::new();
-    let normalized_nodes = nodes
-        .iter()
-        .map(|node| {
-            let m = node.as_object().ok_or("FlowNode must be an object")?;
-            let id = m
-                .get("id")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or("FlowNode.id is required")?;
-            let text = m
-                .get("texto")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or("FlowNode.texto is required")?;
-            if !ids.insert(id.to_string()) {
-                return Err("Duplicate flow node IDs".to_string());
-            }
-            Ok(serde_json::json!({"id": id, "texto": text}))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    if !ids.contains(start) {
-        return Err("Flow requires unique node IDs and a valid inicio".to_string());
-    }
-    let mut edge_set = std::collections::HashSet::new();
-    let normalized_edges = edges
-        .as_array()
-        .expect("checked array")
-        .iter()
-        .map(|edge| {
-            let m = edge.as_object().ok_or("FlowEdge must be an object")?;
-            let from = m
-                .get("origem")
-                .and_then(Value::as_str)
-                .ok_or("FlowEdge.origem is required")?;
-            let to = m
-                .get("destino")
-                .and_then(Value::as_str)
-                .ok_or("FlowEdge.destino is required")?;
-            let label = m
-                .get("rotulo")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or("FlowEdge.rotulo is required")?;
-            if !ids.contains(from) || !ids.contains(to) {
-                return Err("Flow edge refers to a missing node".to_string());
-            }
-            if !edge_set.insert((from.to_string(), to.to_string(), label.to_string())) {
-                return Err("Duplicate flow edges".to_string());
-            }
-            Ok(serde_json::json!({"origem": from, "destino": to, "rotulo": label}))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let mut reached = std::collections::HashSet::from([start.to_string()]);
-    loop {
-        let prior = reached.len();
-        for edge in &normalized_edges {
-            if reached.contains(edge["origem"].as_str().unwrap_or("")) {
-                reached.insert(edge["destino"].as_str().unwrap_or("").to_string());
+        if let Some(tables) = &self.tabelas_notas {
+            for table in tables {
+                table.validate()?;
             }
         }
-        if prior == reached.len() {
-            break;
+        if let Some(fig) = &self.figura {
+            fig.validate()?;
         }
-    }
-    if reached != ids {
-        return Err("Every flow node must be reachable from inicio".to_string());
-    }
-    let mut out = Map::new();
-    out.insert("inicio".to_string(), Value::String(start.to_string()));
-    out.insert("nos".to_string(), Value::Array(normalized_nodes));
-    out.insert("arestas".to_string(), Value::Array(normalized_edges));
-    Ok(Value::Object(out))
-}
-
-fn normalize_table_spec(input: &Map<String, Value>) -> Result<Value, String> {
-    let caption = match input.get("caption") {
-        None => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        _ => return Err("TableSpec.caption must be a string".to_string()),
-    };
-    let headers = input
-        .get("headers")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "TableSpec.headers must be an array".to_string())?;
-    if headers.is_empty() || !headers.iter().all(Value::is_string) {
-        return Err("TableSpec.headers must be a non-empty string array".to_string());
-    }
-    let rows = input
-        .get("rows")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "TableSpec.rows must be an array".to_string())?;
-    if rows.iter().any(|row| {
-        !row.as_array()
-            .is_some_and(|cells| cells.len() == headers.len() && cells.iter().all(Value::is_string))
-    }) {
-        return Err("TableSpec.rows must match the headers column count".to_string());
-    }
-    Ok(serde_json::json!({"caption": caption, "headers": headers, "rows": rows}))
-}
-
-fn normalize_media_figure(input: &Map<String, Value>) -> Result<Value, String> {
-    let mut m = Map::new();
-    for field in [
-        "filename",
-        "caption",
-        "title",
-        "context_link",
-        "item_type",
-        "style",
-        "caption_style",
-    ] {
-        let value = input.get(field);
-        let string = match value {
-            Some(Value::String(s)) => s.clone(),
-            None if field == "filename" => {
-                return Err("Field 'MediaFigure.filename' is required".to_string());
+        for fig in &self.figuras {
+            fig.validate()?;
+        }
+        for raw_imgs in [
+            self.images.take(),
+            self.imagens_relacionadas.take(),
+            self.imagens.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            for fig_val in crate::image_alias::parse_images_html_to_figures(&raw_imgs) {
+                let fig: RawMediaFigure =
+                    serde_json::from_value(fig_val).map_err(|e| e.to_string())?;
+                fig.validate()?;
+                self.figuras.push(fig);
             }
-            None if field == "item_type" => "figure".to_string(),
-            None => String::new(),
-            _ => return Err(format!("Field 'MediaFigure.{field}' must be a string")),
-        };
-        if field == "item_type" && string != "figure" && string != "table" {
-            return Err("Field 'MediaFigure.item_type' must be figure or table".to_string());
         }
-        m.insert(field.to_string(), Value::String(string));
+        if let Some(note_figs) = &self.figuras_notas {
+            note_figs.validate()?;
+        }
+        Ok(self)
     }
-    Ok(Value::Object(m))
 }
 
-fn normalize_str_or_str_list(raw: Option<&Value>, field: &str) -> Result<Value, String> {
-    match raw {
-        None => Ok(Value::Array(Vec::new())),
-        Some(Value::String(s)) => Ok(Value::String(s.clone())),
-        Some(Value::Array(arr)) => {
-            let mut out = Vec::with_capacity(arr.len());
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| format!("Each item in '{field}' must be a string"))?;
-                out.push(Value::String(s.to_string()));
-            }
-            Ok(Value::Array(out))
-        }
-        Some(_) => Err(format!(
-            "Field '{field}' must be a string or list of strings"
-        )),
+pub fn normalize_draft(input: &Value) -> Result<Value, String> {
+    if !input.is_object() {
+        return Err("CardDraft input must be a JSON object".to_string());
     }
+    let raw: RawCardDraft = serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+    let normalized = raw.normalize()?;
+    serde_json::to_value(normalized).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -627,5 +640,22 @@ mod tests {
         assert_eq!(out["tabela_notas"]["caption"], json!(""));
         assert_eq!(out["figura"]["caption"], json!(""));
         assert_eq!(out["figura"]["item_type"], json!("figure"));
+    }
+
+    #[test]
+    fn reject_invalid_draft_tipo() {
+        let bad_tipo = json!({
+            "tipo": "CLOZ",
+            "enunciado_ou_sentenca": "Texto"
+        });
+        let err = normalize_draft(&bad_tipo).unwrap_err();
+        assert!(err.contains("Unsupported draft tipo"));
+
+        let bad_tipo2 = json!({
+            "note_type": "INVALID",
+            "enunciado_ou_sentenca": "Texto"
+        });
+        let err2 = normalize_draft(&bad_tipo2).unwrap_err();
+        assert!(err2.contains("Unsupported draft tipo"));
     }
 }

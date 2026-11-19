@@ -25,11 +25,16 @@ Para integrar com clientes compatíveis com o Model Context Protocol (como Claud
 
 > **Aviso Importante — Subcomando `serve` Obrigatório:** O executável Rust é um utilitário CLI multifuncional (`serve`, `--version`, `build-info`, `health`, `oracle`). Se o argumento `serve` for omitido na configuração do cliente MCP, o processo encerrará com código de erro 2 e imprimirá a sintaxe de uso em `stderr`, impedindo a conexão JSON-RPC.
 
-### Prevenção de Conflito de Executáveis (PATH Shadowing)
+### Desambiguação de Executáveis no PATH
 
-O pacote Python legado e o binário Rust compartilham o mesmo nome de executável (`anki-workflow-mcp`). Para evitar comportamentos inesperados:
-1. Sempre configure clientes MCP apontando para o **caminho absoluto** do executável desejado.
-2. Caso use `cargo install --path apps/anki-workflow-mcp --locked --root <destino>`, escolha um diretório `<destino>` que não colida com o ambiente virtual do Python ou priorize o caminho explícito.
+Para eliminar colisões de executáveis no `PATH` entre os ecossistemas Rust e Python, o comando Python foi renomeado para `anki-workflow-mcp-legacy`, reservando `anki-workflow-mcp` ao servidor nativo primário:
+
+| Servidor | Executável no `PATH` | Como iniciar no cliente MCP | Escopo |
+| :--- | :--- | :--- | :--- |
+| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 6 ferramentas determinísticas em memória (`quality_v1`). |
+| **Legado (Python)** | `anki-workflow-mcp-legacy` | `"command": "anki-workflow-mcp-legacy"` | 49 ferramentas legadas, staging em disco e `export_final`. |
+
+O núcleo Rust requer MSRV mínimo 1.89 (exigido por dependências como `uuid 1.29.2`, `rmcp 3.10.0` e sintaxe let-chains). O toolchain padrão é fixado em `1.99.1` via `rust-toolchain.toml` (desvio de 1.99.0 alinhado ao canal estável disponível).
 
 ---
 

@@ -1,0 +1,48 @@
+{
+  "id": "general",
+  "name": "General (Neutral)",
+  "description": "Perfil neutro de domínio geral, sem bancas médicas brasileiras ou regras específicas de provas.",
+  "language": "neutral",
+  "default_max_note_chars": 1200,
+  "table_max_note_chars": 2500,
+  "exam_boilerplate": {
+    "enabled": false,
+    "known_labels": [],
+    "phrase_patterns": []
+  },
+  "info_policy": {
+    "source_fidelity": "All factual claims and explanations must remain faithful to the provided source material.",
+    "notes_purpose": "Empty or short notes are valid without a minimum floor; depth varies with difficulty and authorized sources.",
+    "forbid_metadata_headers": true,
+    "forbid_verbatim_answer_restatement": true,
+    "forbid_exam_only_mentions": false,
+    "preferred_list_format": "• <b>Tópico:</b> Explicação concisa."
+  },
+  "editorial_checklist": [
+    {
+      "id": "atomicity",
+      "label": "Atomicidade",
+      "description": "Cada cartão aborda uma única unidade de conhecimento de forma clara e objetiva."
+    },
+    {
+      "id": "source_fidelity",
+      "label": "Fidelidade à fonte",
+      "description": "Todas as informações e explicações derivam diretamente da fonte de estudo."
+    },
+    {
+      "id": "pedagogical_notes",
+      "label": "Notas explicativas úteis",
+      "description": "Notas Adicionais aprofundam o entendimento em vez de repetir literalmente a resposta."
+    },
+    {
+      "id": "no_internal_metadata",
+      "label": "Ausência de metadados internos",
+      "description": "Não há cabeçalhos internos como ID:, Âncora:, Cross-ref: ou Relevância: nos campos visíveis."
+    },
+    {
+      "id": "clean_html_style",
+      "label": "Formatação HTML padronizada",
+      "description": "Itens de lista utilizam o padrão '• <b>Tópico:</b> ...' e o tamanho permanece enxuto."
+    }
+  ]
+}

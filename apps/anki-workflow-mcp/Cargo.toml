@@ -2,12 +2,18 @@
 name = "anki-workflow-mcp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lints]
 workspace = true
 
+[features]
+default = []
+oracle = []
+
 [dependencies]
+schemars = "1"
 anki-domain = { path = "../../crates/anki-domain" }
 anki-parser = { path = "../../crates/anki-parser" }
 anki-validate = { path = "../../crates/anki-validate" }

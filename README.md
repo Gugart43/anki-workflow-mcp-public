@@ -36,7 +36,7 @@ O binário nativo `anki-workflow-mcp` disponibiliza o transporte MCP via stdio e
 
 ### 1. Binário Nativo Rust (Recomendado)
 
-Requer toolchain Rust estável atual (validado localmente com Rust 1.99; CI usa stable):
+Requer toolchain Rust estável (MSRV mínimo 1.89 exigido por `uuid 1.29.2`, `rmcp 3.10.0` e let-chains; toolchain fixado em `1.99.1` em `rust-toolchain.toml`, documentando desvio de 1.99.0 alinhado ao canal estável disponível):
 
 ```bash
 # Compilar binário de release otimizado
@@ -47,15 +47,12 @@ O binário resultante estará em:
 - **Linux/macOS:** `target/release/anki-workflow-mcp`
 - **Windows:** `target/release/anki-workflow-mcp.exe`
 
-#### Instalação no Sistema e Advertência de Colisão
+#### Desambiguação de Executáveis no PATH
 
-Você pode instalar o binário localmente usando o Cargo:
-
-```bash
-cargo install --path apps/anki-workflow-mcp --locked --root <destino>
-```
-
-> **Atenção — Risco de Colisão de Executáveis:** O pacote Python legado também define um executável denominado `anki-workflow-mcp` via `[project.scripts]`. Se ambos forem instalados no mesmo diretório ou se diretórios do Python e do Cargo coexistirem na variável `PATH`, haverá colisão de nomes (*shadowing*). Recomenda-se apontar o caminho absoluto do binário na configuração do cliente MCP ou utilizar `--root` dedicado.
+| Servidor | Executável no `PATH` | Como iniciar no cliente MCP | Escopo |
+| :--- | :--- | :--- | :--- |
+| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 6 ferramentas determinísticas em memória (`quality_v1`). |
+| **Legado (Python)** | `anki-workflow-mcp-legacy` | `"command": "anki-workflow-mcp-legacy"` | 49 ferramentas legadas, staging em disco e `export_final`. |
 
 #### Configuração do Cliente MCP (Rust)
 
@@ -112,43 +109,17 @@ uv run python -m anki_mcp.server
 
 ## Desenvolvimento e Qualidade
 
-O repositório impõe verificações estritas e automatizadas para os dois ecossistemas em Linux e Windows.
-
-### Gates do Rust
+O repositório disponibiliza um `justfile` unificado para execução local multiplataforma dos gates de verificação que espelham o CI:
 
 ```bash
-# Formatação
-cargo fmt --all -- --check
+# Configuração inicial do ambiente Python com dependências congeladas
+just setup
 
-# Linter com avisos como erro
-cargo clippy --all-targets --all-features -- -D warnings
-
-# Suíte completa de testes unitários e de integração
-cargo test --workspace --all-features
-
-# Verificação de build com lockfile estrito
-cargo build --locked -p anki-workflow-mcp
+# Gate completo pré-PR (Rust check, Python check e Parity)
+just check
 ```
 
-### Gates do Python e Paridade Diferencial
-
-```bash
-# Sincronizar ambiente de desenvolvimento
-uv sync --extra dev --frozen
-
-# Linters e formatação Python
-uv run ruff check src tests
-uv run ruff format --check src tests
-
-# Testes com cobertura mínima de 70%
-uv run pytest --cov=anki_mcp --cov-fail-under=70
-
-# Verificação estática de tipos
-uv run --with mypy mypy src --ignore-missing-imports
-
-# Suíte diferencial de paridade bit a bit (Python vs Rust)
-uv run pytest tests/differential/ -v
-```
+Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para a lista completa de comandos e diretrizes de desenvolvimento.
 
 ---
 

@@ -32,7 +32,7 @@ pub fn check_crossrefs(
 
         if !in_active && !in_current {
             let mut diag = Diagnostic::new(
-                "XREF.BROKEN",
+                anki_domain::DiagnosticCode::from_static("XREF.BROKEN"),
                 Severity::Critical,
                 "anki-export-validator",
                 format!(

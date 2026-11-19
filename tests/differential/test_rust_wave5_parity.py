@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
-from functools import cache
 from pathlib import Path
 
 import pytest
@@ -19,20 +16,12 @@ from anki_mcp.core.tables import escape_cell, markdown_tables_to_html
 
 ROOT = Path(__file__).resolve().parents[2]
 
+try:
+    from tests.differential.conftest import resolve_rust_binary
+except ImportError:
+    from conftest import resolve_rust_binary
 
-@cache
-def _rust_binary() -> Path:
-    exe = "anki-workflow-mcp.exe" if os.name == "nt" else "anki-workflow-mcp"
-    path = ROOT / "target" / "debug" / exe
-    if os.environ.get("ANKI_SKIP_RUST_ORACLE") == "1":
-        pytest.skip("ANKI_SKIP_RUST_ORACLE=1")
-    if shutil.which("cargo") is None:
-        pytest.skip("Rust cargo unavailable in this environment")
-    # Build once even if a previous target exists: an old oracle would reject
-    # new operations and produce misleading parity failures.
-    subprocess.run(["cargo", "build", "-p", "anki-workflow-mcp"], cwd=ROOT, check=True)
-    assert path.is_file(), "Rust oracle did not produce an executable"
-    return path
+_rust_binary = resolve_rust_binary
 
 
 def _oracle(op: str, **kwargs: object) -> dict:

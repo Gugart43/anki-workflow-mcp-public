@@ -168,7 +168,7 @@ fn full_valid_qa_passes_after_snapshot_and_review() {
     assert_eq!(prep.snapshot_hash.len(), 71);
     assert_eq!(
         prep.content_hash,
-        compute_receipt_v1(&input.qa_csv, &input.cloze_csv).0
+        compute_receipt_v1(&input.qa_csv, &input.cloze_csv).into_inner()
     );
     assert_eq!(prep.retrieval_count, 1);
     assert_eq!(prep.reviewed_count, 0);

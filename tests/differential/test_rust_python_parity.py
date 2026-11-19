@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -24,23 +23,17 @@ from anki_mcp.core.sanitize import sanitize_field
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = ROOT / "fixtures" / "golden_parity.json"
 
+try:
+    from tests.differential.conftest import resolve_rust_binary
+except ImportError:
+    from conftest import resolve_rust_binary
+
 
 def _find_rust_binary() -> Path | None:
-    exe_name = "anki-workflow-mcp.exe" if os.name == "nt" else "anki-workflow-mcp"
-    for profile in ("debug", "release"):
-        candidate = ROOT / "target" / profile / exe_name
-        if candidate.is_file():
-            return candidate
-    if shutil.which("cargo"):
-        subprocess.run(
-            ["cargo", "build", "-p", "anki-workflow-mcp"],
-            cwd=ROOT,
-            check=True,
-        )
-        candidate = ROOT / "target" / "debug" / exe_name
-        if candidate.is_file():
-            return candidate
-    return None
+    try:
+        return resolve_rust_binary()
+    except pytest.skip.Exception:
+        return None
 
 
 def _run_rust_oracle(binary: Path, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -233,4 +226,31 @@ def test_python_vs_rust_golden_parity() -> None:
     assert len(rust_results) == len(expected_python)
 
     for (label, py_val), rs_val in zip(expected_python, rust_results, strict=True):
-        assert rs_val == py_val, f"Parity mismatch on {label}: rust={rs_val} != python={py_val}"
+        if label == "check_csv:entities_amp_tags_classes_mathjax_comments":
+            rs_diags = [dict(d) for d in rs_val["diagnostics"]]
+            py_diags = [dict(d) for d in py_val["diagnostics"]]
+            assert len(rs_diags) == len(py_diags)
+            for rs_d, py_d in zip(rs_diags, py_diags, strict=True):
+                if rs_d.get("code") == "FMT.CLASS_UNKNOWN":
+                    rs_sugg = rs_d.pop("suggestion")
+                    py_sugg = py_d.pop("suggestion")
+                    assert rs_sugg.startswith("Use one of: ")
+                    assert py_sugg.startswith("Use one of: ")
+                    rs_classes = set(rs_sugg.removeprefix("Use one of: ").split(", "))
+                    py_classes = set(py_sugg.removeprefix("Use one of: ").split(", "))
+                    assert py_classes.issubset(rs_classes)
+                    assert {".anki-table", ".anki-callout", ".ambr-note"}.issubset(rs_classes)
+                assert rs_d == py_d, f"Parity mismatch on {label}: rust={rs_d} != python={py_d}"
+        elif label == "check_notes:metadata_dup_and_style":
+            rs_diags = [dict(d) for d in rs_val["diagnostics"]]
+            py_diags = [dict(d) for d in py_val["diagnostics"]]
+            assert len(rs_diags) == len(py_diags)
+            for rs_d, py_d in zip(rs_diags, py_diags, strict=True):
+                if rs_d.get("code") == "NOTE.STYLE_WARN":
+                    rs_msg = rs_d.pop("message")
+                    py_msg = py_d.pop("message")
+                    prefix = "List items found without <b>…</b> wrapper — preferred: "
+                    assert rs_msg.startswith(prefix) and py_msg.startswith(prefix)
+                assert rs_d == py_d, f"Parity mismatch on {label}: rust={rs_d} != python={py_d}"
+        else:
+            assert rs_val == py_val, f"Parity mismatch on {label}: rust={rs_val} != python={py_val}"

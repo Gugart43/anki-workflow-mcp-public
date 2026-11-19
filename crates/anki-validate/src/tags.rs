@@ -41,7 +41,7 @@ pub fn check_tags(
         let tag_for_check = tag.replace(SEPARATOR, "");
         if !tag_for_check.is_empty() && !VALID_TAG_CHARS_NO_SEP.is_match(&tag_for_check) {
             let diag = Diagnostic::new(
-                "TAG.FORMAT",
+                anki_domain::DiagnosticCode::from_static("TAG.FORMAT"),
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' contains invalid characters"),
@@ -53,7 +53,7 @@ pub fn check_tags(
         let tag_depth = depth(tag);
         if tag_depth > 4 {
             let diag = Diagnostic::new(
-                "TAG.DEPTH",
+                anki_domain::DiagnosticCode::from_static("TAG.DEPTH"),
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' has depth {tag_depth} (maximum is 4 levels)"),
@@ -65,7 +65,7 @@ pub fn check_tags(
             && !nodes.contains(tag)
         {
             let diag = Diagnostic::new(
-                "TAG.UNREGISTERED",
+                anki_domain::DiagnosticCode::from_static("TAG.UNREGISTERED"),
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' is not registered in the Manifesto taxonomy"),

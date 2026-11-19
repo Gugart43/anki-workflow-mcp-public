@@ -1,7 +1,7 @@
 # ADR-001: Migração para 100% Rust em produção e política de compatibilidade
 
-- **Status:** Aceito (Arquitetura-alvo / Parcialmente implementado)
-- **Status de Implementação:** Parcialmente implementado. O motor Rust foi promovido como componente primário em memória (6 ferramentas stdio puras), enquanto a persistência transacional em disco, manifesto, catálogos e sincronização de mídia permanecem executados pelo servidor Python legado.
+- **Status:** Accepted (Partially Implemented)
+- **Status de Implementação:** Núcleo Rust (`apps/anki-workflow-mcp` + 3 crates) ativo na `main` com 6 tools em memória; legado Python ainda mantém 49 tools e persistência.
 - **Data:** 2026-11-14
 - **Baseline Python congelada:** `d1d0098b367448c471303f7d0912996d50ac2f67` (`anki-workflow-mcp` v0.3.1)
 - **Plano de referência:** `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`

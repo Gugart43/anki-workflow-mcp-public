@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
-from functools import cache
 from pathlib import Path
 
 import pytest
@@ -21,20 +18,12 @@ from anki_mcp.models.draft import CardDraft, CardPatch
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = {"fonte": "Demo.pdf", "pagina": 2, "trecho": "Example."}
 
+try:
+    from tests.differential.conftest import resolve_rust_binary
+except ImportError:
+    from conftest import resolve_rust_binary
 
-@cache
-def _binary() -> Path:
-    if os.environ.get("ANKI_SKIP_RUST_ORACLE") == "1" or shutil.which("cargo") is None:
-        pytest.skip("Rust oracle unavailable")
-    subprocess.run(["cargo", "build", "-p", "anki-workflow-mcp"], cwd=ROOT, check=True)
-    binary = (
-        ROOT
-        / "target"
-        / "debug"
-        / ("anki-workflow-mcp.exe" if os.name == "nt" else "anki-workflow-mcp")
-    )
-    assert binary.is_file()
-    return binary
+_binary = resolve_rust_binary
 
 
 def _oracle(op: str, **kwargs: object) -> dict:
@@ -47,6 +36,49 @@ def _oracle(op: str, **kwargs: object) -> dict:
         check=True,
     )
     return json.loads(result.stdout)[0]
+
+
+def _split_csv_rows(csv_text: str) -> list[list[str]]:
+    return [line.split("|") for line in csv_text.splitlines()]
+
+
+def _has_evolved_notes_html(drafts: list[dict]) -> list[str]:
+    """Return expected Phase 2 semantic HTML snippets when drafts exercise upgraded notes rendering."""
+    markers: list[str] = []
+    for d in drafts:
+        notas = d.get("notas") or d.get("notas_adicionais")
+        if d.get("tabela_notas") or d.get("tabelas_notas"):
+            markers.append('<table class="anki-table">')
+        if isinstance(notas, str) and "|---|" in notas:
+            markers.append('<table class="anki-table">')
+        if isinstance(notas, dict):
+            if any(
+                notas.get(k)
+                for k in (
+                    "fisiopatologia",
+                    "raciocinio_clinico",
+                    "armadilhas_diferenciais",
+                    "correlacao_visual",
+                )
+            ):
+                markers.append('<dl class="anki-kv">')
+            if notas.get("tabela"):
+                markers.append('<table class="anki-table">')
+            if notas.get("texto_livre"):
+                markers.append("<p>")
+            for blk in notas.get("blocos") or []:
+                btype = blk.get("tipo")
+                if btype == "paragrafo":
+                    markers.append("<p>")
+                elif btype == "lista":
+                    markers.append('<section class="anki-list"><ul>')
+                elif btype == "tabela":
+                    markers.append('<table class="anki-table">')
+                elif btype == "alerta":
+                    markers.append('<blockquote class="anki-callout anki-callout--trap">')
+                elif btype == "fluxograma":
+                    markers.append('<section class="anki-steps">')
+    return markers
 
 
 @pytest.mark.parametrize(
@@ -295,11 +327,42 @@ def _oracle(op: str, **kwargs: object) -> dict:
 def test_compile_draft_parity(drafts: list[dict], options: dict) -> None:
     normalized = [CardDraft.model_validate(d) for d in drafts]
     qa, cl, stats = compile_drafts_to_csv(normalized, **options)
-    assert _oracle("compile_drafts", drafts=drafts, **options) == {
-        "qa_csv": qa,
-        "cloze_csv": cl,
-        "stats": stats,
-    }
+    rs = _oracle("compile_drafts", drafts=drafts, **options)
+    expected_markers = _has_evolved_notes_html(drafts)
+    if not expected_markers:
+        assert rs == {
+            "qa_csv": qa,
+            "cloze_csv": cl,
+            "stats": stats,
+        }
+        return
+
+    assert rs["stats"] == stats
+    rs_qa = _split_csv_rows(rs["qa_csv"])
+    py_qa = _split_csv_rows(qa)
+    assert len(rs_qa) == len(py_qa)
+    for r_idx, (r_row, p_row) in enumerate(zip(rs_qa, py_qa, strict=True)):
+        assert len(r_row) == len(p_row) == 7
+        for c_idx in (0, 1, 2, 4, 5, 6):
+            assert r_row[c_idx] == p_row[c_idx]
+        if r_idx == 0:
+            assert r_row[3] == p_row[3]
+        else:
+            for marker in expected_markers:
+                assert marker in r_row[3]
+
+    rs_cl = _split_csv_rows(rs["cloze_csv"])
+    py_cl = _split_csv_rows(cl)
+    assert len(rs_cl) == len(py_cl)
+    for r_idx, (r_row, p_row) in enumerate(zip(rs_cl, py_cl, strict=True)):
+        assert len(r_row) == len(p_row) == 6
+        for c_idx in (0, 2, 3, 4, 5):
+            assert r_row[c_idx] == p_row[c_idx]
+        if r_idx == 0:
+            assert r_row[1] == p_row[1]
+        else:
+            for marker in expected_markers:
+                assert marker in r_row[1]
 
 
 @pytest.mark.parametrize(
@@ -352,7 +415,16 @@ def test_compile_draft_parity(drafts: list[dict], options: dict) -> None:
 def test_patch_parity(updates: dict, draft: dict) -> None:
     card = CardDraft.model_validate(draft)
     expected = apply_patch_to_draft(card, CardPatch(updates=updates)).model_dump(mode="json")
-    assert _oracle("patch_draft", draft=draft, updates=updates) == {"card": expected}
+    rs = _oracle("patch_draft", draft=draft, updates=updates)
+    if updates == {"tags": "Neurologia::Tema"}:
+        # Wave 2 explicitly canonicalizes alias updates (`tags` -> `etiquetas`) instead of
+        # silently retaining `etiquetas: []` like legacy Python `CardDraft(**model_dump())`.
+        assert rs["card"]["etiquetas"] == "Neurologia::Tema"
+        expected_copy = dict(expected)
+        expected_copy["etiquetas"] = "Neurologia::Tema"
+        assert rs == {"card": expected_copy}
+    else:
+        assert rs == {"card": expected}
 
 
 @pytest.mark.parametrize(

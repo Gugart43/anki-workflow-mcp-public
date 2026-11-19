@@ -22,7 +22,7 @@ static BOLD_UNDER_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"__(.+?)__").expect("valid bold under regex"));
 
 const AUTO_CLOSE_TAGS: &[&str] = &[
-    "b", "strong", "i", "em", "u", "s", "small", "span", "code", "mark", "sub", "sup",
+    "b", "strong", "i", "em", "u", "s", "small", "span", "code", "mark", "sub", "sup", "cite",
 ];
 
 fn convert_markdown_italic(input: &str, fixes: &mut Vec<String>) -> String {

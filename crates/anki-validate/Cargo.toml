@@ -2,12 +2,15 @@
 name = "anki-validate"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
+schemars = "1"
+ammonia = "4.2.5"
 anki-domain = { path = "../anki-domain" }
 anki-parser = { path = "../anki-parser" }
 regex = "1"

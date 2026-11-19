@@ -1,7 +1,7 @@
 # ADR-006: Publicação Imutável de Artefatos, Projeções de Sistema de Arquivos, Retenção e Recuperação
 
-- **Status:** Aceito (Arquitetura-alvo — Não implementado no estágio atual)
-- **Status de Implementação:** Não implementado no código promovido. O modelo relacional de publicação imutável (`batches`, `artifact_versions`), projeções em disco em duas etapas e Garbage Collection em duas fases constituem a especificação arquitetural-alvo. No estágio atual, a publicação e persistência física em disco continuam executadas pelo servidor Python legado via `export_final`, que grava diretamente os arquivos CSV no disco sob locks de arquivo.
+- **Status:** Proposed / Target Architecture (Not Implemented)
+- **Status de Implementação:** Publicação imutável em 2 estágios e GC em 2 fases não implementados; exportação atual via `export_final` no Python.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-005, Seções 3.2, 4.3 e 5.1 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-04, P-15, P-16

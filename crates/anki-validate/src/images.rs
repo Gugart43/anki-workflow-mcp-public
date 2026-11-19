@@ -45,14 +45,20 @@ static HTML_TAG_RE: LazyLock<Regex> =
 const OWNER_SKILL: &str = "anki-image-injector";
 
 fn make_diag(
-    code: &str,
+    code: &'static str,
     severity: Severity,
     message: impl Into<String>,
     row: Option<usize>,
     field: &str,
     suggestion: Option<&str>,
 ) -> Diagnostic {
-    let mut d = Diagnostic::new(code, severity, OWNER_SKILL, message).with_field(field);
+    let mut d = Diagnostic::new(
+        anki_domain::DiagnosticCode::from_static(code),
+        severity,
+        OWNER_SKILL,
+        message,
+    )
+    .with_field(field);
     if let Some(r) = row {
         d = d.with_row(r);
     }

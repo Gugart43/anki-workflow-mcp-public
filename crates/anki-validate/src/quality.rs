@@ -8,6 +8,7 @@
 
 use anki_domain::{Diagnostic, Severity, canonical_csv_text, compute_receipt_v1};
 use anki_parser::{find_cloze_spans, iter_data_lines, py_is_blank, split_row};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,7 +17,29 @@ use crate::{BatchInformationReview, review_batch_information};
 pub const QUALITY_SCHEMA_VERSION: &str = "quality_v1";
 const OWNER_SKILL: &str = "anki-post-curator";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QualityPrepareInput {
+    pub qa_csv: String,
+    pub cloze_csv: String,
+    #[serde(default)]
+    pub sources: Vec<QualitySource>,
+    #[serde(default)]
+    pub obligations: Vec<QualityObligation>,
+    #[serde(default)]
+    pub bindings: Vec<QualityBinding>,
+}
+
+pub struct QualityRequestRef<'a> {
+    pub qa_csv: &'a str,
+    pub cloze_csv: &'a str,
+    pub sources: &'a [QualitySource],
+    pub obligations: &'a [QualityObligation],
+    pub bindings: &'a [QualityBinding],
+    pub reviews: Option<&'a [QualityReview]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityInput {
     pub qa_csv: String,
@@ -31,7 +54,7 @@ pub struct QualityInput {
     pub reviews: Vec<QualityReview>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualitySource {
     pub id: String,
@@ -41,7 +64,7 @@ pub struct QualitySource {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityObligation {
     pub id: String,
@@ -49,7 +72,7 @@ pub struct QualityObligation {
     pub source_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityBinding {
     pub note_type: String,
@@ -60,7 +83,7 @@ pub struct QualityBinding {
     pub evidence: Vec<QualityEvidence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityEvidence {
     pub source_id: String,
@@ -69,7 +92,7 @@ pub struct QualityEvidence {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityDimensions {
     pub source_fidelity: bool,
@@ -109,7 +132,7 @@ impl QualityDimensions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityReview {
     pub note_type: String,
@@ -229,18 +252,18 @@ fn normalize_crlf_only(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-fn compute_snapshot_hash(input: &QualityInput) -> String {
+fn compute_snapshot_hash(req: &QualityRequestRef<'_>) -> String {
     let payload = SnapshotPayload {
         schema_version: QUALITY_SCHEMA_VERSION,
-        qa_csv: canonical_csv_text(&input.qa_csv),
-        cloze_csv: canonical_csv_text(&input.cloze_csv),
-        sources: &input.sources,
-        obligations: &input.obligations,
-        bindings: &input.bindings,
+        qa_csv: canonical_csv_text(req.qa_csv),
+        cloze_csv: canonical_csv_text(req.cloze_csv),
+        sources: req.sources,
+        obligations: req.obligations,
+        bindings: req.bindings,
     };
     let canonical_json =
         serde_json::to_string(&payload).expect("QualityInput types are always JSON-serializable");
-    compute_receipt_v1("anki-quality-v1", &canonical_json).0
+    compute_receipt_v1("anki-quality-v1", &canonical_json).into_inner()
 }
 
 fn has_unclosed_cloze_marker(sentence: &str) -> bool {
@@ -264,15 +287,16 @@ fn has_unclosed_cloze_marker(sentence: &str) -> bool {
 }
 
 fn diag_critical(code: &'static str, message: impl Into<String>) -> Diagnostic {
-    Diagnostic::new(code, Severity::Critical, OWNER_SKILL, message)
+    Diagnostic::from_static_code(code, Severity::Critical, OWNER_SKILL, message)
 }
 
 fn diag_warn(code: &'static str, message: impl Into<String>) -> Diagnostic {
-    Diagnostic::new(code, Severity::Warn, OWNER_SKILL, message)
+    Diagnostic::from_static_code(code, Severity::Warn, OWNER_SKILL, message)
 }
 
 fn check_batch_structural_and_card_criticals(
-    input: &QualityInput,
+    qa_csv: &str,
+    cloze_csv: &str,
     review: &BatchInformationReview,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BTreeSet<RetrievalKey> {
@@ -343,7 +367,7 @@ fn check_batch_structural_and_card_criticals(
         }
     }
 
-    for (row, line) in iter_data_lines(&input.qa_csv) {
+    for (row, line) in iter_data_lines(qa_csv) {
         let split = split_row(line, 7);
         if split.structural_ok {
             let prompt = split.cols.first().map_or("", String::as_str);
@@ -360,7 +384,7 @@ fn check_batch_structural_and_card_criticals(
         }
     }
 
-    for (row, line) in iter_data_lines(&input.cloze_csv) {
+    for (row, line) in iter_data_lines(cloze_csv) {
         let split = split_row(line, 6);
         if split.structural_ok {
             let sentence = split.cols.first().map_or("", String::as_str);
@@ -874,17 +898,18 @@ fn build_guidance(mode: &str) -> Vec<String> {
     guidance
 }
 
-fn run_quality(input: &QualityInput, evaluate_reviews: bool) -> QualityReport {
+fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
+    let evaluate_reviews = req.reviews.is_some();
     let mode = if evaluate_reviews {
         "evaluate"
     } else {
         "prepare"
     };
-    let content_hash = compute_receipt_v1(&input.qa_csv, &input.cloze_csv).0;
-    let snapshot_hash = compute_snapshot_hash(input);
-    let review = review_batch_information(&input.qa_csv, &input.cloze_csv);
+    let content_hash = compute_receipt_v1(req.qa_csv, req.cloze_csv).into_inner();
+    let snapshot_hash = compute_snapshot_hash(req);
+    let review = review_batch_information(req.qa_csv, req.cloze_csv);
     let mut diagnostics = Vec::new();
-    for (csv, columns) in [(&input.qa_csv, 7), (&input.cloze_csv, 6)] {
+    for (csv, columns) in [(req.qa_csv, 7), (req.cloze_csv, 6)] {
         for (row, line) in iter_data_lines(csv) {
             for field in split_row(line, columns).cols {
                 if crate::html_security::has_unsafe_html(&field) {
@@ -900,11 +925,15 @@ fn run_quality(input: &QualityInput, evaluate_reviews: bool) -> QualityReport {
         }
     }
 
-    let expected_retrievals =
-        check_batch_structural_and_card_criticals(input, &review, &mut diagnostics);
+    let expected_retrievals = check_batch_structural_and_card_criticals(
+        req.qa_csv,
+        req.cloze_csv,
+        &review,
+        &mut diagnostics,
+    );
     diagnostics.extend(crate::quality_content::review_content(
-        &input.qa_csv,
-        &input.cloze_csv,
+        req.qa_csv,
+        req.cloze_csv,
     ));
 
     let retrieval_count = review.total_cards;
@@ -915,19 +944,19 @@ fn run_quality(input: &QualityInput, evaluate_reviews: bool) -> QualityReport {
         ));
     }
 
-    let source_map = validate_sources(&input.sources, &mut diagnostics);
-    let obligation_map = validate_obligations(&input.obligations, &source_map, &mut diagnostics);
+    let source_map = validate_sources(req.sources, &mut diagnostics);
+    let obligation_map = validate_obligations(req.obligations, &source_map, &mut diagnostics);
     let covered_obligations = validate_bindings(
-        &input.bindings,
+        req.bindings,
         &expected_retrievals,
         &source_map,
         &obligation_map,
         &mut diagnostics,
     );
 
-    let reviewed_count = if evaluate_reviews {
+    let reviewed_count = if let Some(reviews) = req.reviews {
         validate_reviews(
-            &input.reviews,
+            reviews,
             &expected_retrievals,
             &snapshot_hash,
             &mut diagnostics,
@@ -958,7 +987,7 @@ fn run_quality(input: &QualityInput, evaluate_reviews: bool) -> QualityReport {
         export_authorized: false,
         retrieval_count,
         reviewed_count,
-        obligation_count: input.obligations.len(),
+        obligation_count: req.obligations.len(),
         covered_obligation_count: covered_obligations.len(),
         diagnostics,
         guidance: build_guidance(mode),
@@ -967,15 +996,101 @@ fn run_quality(input: &QualityInput, evaluate_reviews: bool) -> QualityReport {
 }
 
 /// Validate batch integrity, source/obligation/binding graph, and compute the
+/// review-independent `snapshot_hash` using `QualityPrepareInput` without reviews.
+#[must_use]
+pub fn prepare_quality_input(input: &QualityPrepareInput) -> QualityReport {
+    let req = QualityRequestRef {
+        qa_csv: &input.qa_csv,
+        cloze_csv: &input.cloze_csv,
+        sources: &input.sources,
+        obligations: &input.obligations,
+        bindings: &input.bindings,
+        reviews: None,
+    };
+    run_quality(&req)
+}
+
+/// Validate batch integrity, source/obligation/binding graph, and compute the
 /// review-independent `snapshot_hash` while ignoring `input.reviews`.
 #[must_use]
 pub fn prepare_quality(input: &QualityInput) -> QualityReport {
-    run_quality(input, false)
+    let req = QualityRequestRef {
+        qa_csv: &input.qa_csv,
+        cloze_csv: &input.cloze_csv,
+        sources: &input.sources,
+        obligations: &input.obligations,
+        bindings: &input.bindings,
+        reviews: None,
+    };
+    run_quality(&req)
 }
 
 /// Validate batch integrity, source/obligation/binding graph, and current
 /// per-retrieval editorial reviews against the computed `snapshot_hash`.
 #[must_use]
 pub fn evaluate_quality(input: &QualityInput) -> QualityReport {
-    run_quality(input, true)
+    let req = QualityRequestRef {
+        qa_csv: &input.qa_csv,
+        cloze_csv: &input.cloze_csv,
+        sources: &input.sources,
+        obligations: &input.obligations,
+        bindings: &input.bindings,
+        reviews: Some(&input.reviews),
+    };
+    run_quality(&req)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_quality_input_matches_prepare_quality_snapshot() {
+        let prep_input = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta\nPergunta?|Resposta.\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais\n{{c1::Item}} teste|Nota.\n".to_owned(),
+            sources: vec![QualitySource {
+                id: "S1".to_owned(),
+                title: "T".to_owned(),
+                version: "1.0".to_owned(),
+                locator: "p1".to_owned(),
+                text: "Pergunta? Resposta. Item teste".to_owned(),
+            }],
+            obligations: vec![QualityObligation {
+                id: "O1".to_owned(),
+                description: "Obl".to_owned(),
+                source_ids: vec!["S1".to_owned()],
+            }],
+            bindings: vec![],
+        };
+
+        let legacy_input = QualityInput {
+            qa_csv: prep_input.qa_csv.clone(),
+            cloze_csv: prep_input.cloze_csv.clone(),
+            sources: prep_input.sources.clone(),
+            obligations: prep_input.obligations.clone(),
+            bindings: prep_input.bindings.clone(),
+            reviews: vec![],
+        };
+
+        let rep1 = prepare_quality_input(&prep_input);
+        let rep2 = prepare_quality(&legacy_input);
+        assert_eq!(rep1.snapshot_hash, rep2.snapshot_hash);
+        assert_eq!(rep1.mode, "prepare");
+        assert_eq!(rep1.verdict, rep2.verdict);
+    }
+
+    #[test]
+    fn quality_prepare_input_rejects_unknown_reviews_field() {
+        let json_with_reviews = serde_json::json!({
+            "qa_csv": "",
+            "cloze_csv": "",
+            "reviews": []
+        });
+        let result = serde_json::from_value::<QualityPrepareInput>(json_with_reviews);
+        assert!(
+            result.is_err(),
+            "QualityPrepareInput must deny unknown fields (reviews)"
+        );
+    }
 }

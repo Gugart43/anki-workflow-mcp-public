@@ -1,7 +1,7 @@
 # ADR-005: Arquitetura de Escrita em SQLite, Concorrência, Idempotência e Durabilidade
 
-- **Status:** Aceito (Arquitetura-alvo — Não implementado no estágio atual)
-- **Status de Implementação:** Não implementado no código promovido. A arquitetura de persistência relacional SQLite (`anki_workflow.db`), com modo WAL, conexão `SingleWriter`, transações `BEGIN IMMEDIATE`, tabela `operations` e durabilidade configurada, representa a especificação técnica de destino. No estágio atual, o workspace Rust opera 100% em memória sem dependência de SQLite (`rusqlite`/`sqlx`), e as operações duráveis em disco continuam executadas pelo servidor Python legado via arquivos soltos e `filelock`.
+- **Status:** Proposed / Target Architecture (Not Implemented)
+- **Status de Implementação:** Workspace Rust não possui dependência SQLite; persistência atual roda no Python via `filelock`.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-006, Seções 1.3, 3.1 e 4.2 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-02, P-03, P-17, P-23

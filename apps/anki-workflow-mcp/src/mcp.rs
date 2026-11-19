@@ -1,7 +1,12 @@
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
-use anki_validate::quality::{QualityInput, evaluate_quality, prepare_quality};
+use anki_domain::{EvidenceScope, ReviewVerdict};
+use anki_validate::draft_normalize::RawCardDraft;
+use anki_validate::quality::{
+    QualityBinding, QualityDimensions, QualityEvidence, QualityInput, QualityObligation,
+    QualityPrepareInput, QualityReview, QualitySource, evaluate_quality, prepare_quality_input,
+};
 use anki_validate::{compile_drafts, patch_draft, review_batch_information};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode, Implementation, JsonObject,
@@ -10,10 +15,10 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
+use schemars::JsonSchema;
+use schemars::generate::SchemaSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-
-const MAX_ERROR_MESSAGE_CHARS: usize = 400;
 
 const SERVER_INSTRUCTIONS: &str = "\
 Stateless MCP stdio validation and quality evaluation server for Anki QA/Cloze batches. \
@@ -59,7 +64,22 @@ pub async fn run_stdio() -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct InputViolation {
+    code: &'static str,
+    path: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ToolErrorPayload {
+    error: String,
+    code: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    violations: Vec<InputViolation>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EmptyArgs {}
 
@@ -67,9 +87,11 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct CompileDraftsArgs {
+    /// List of card draft objects (QA or Cloze) to normalize and compile.
+    #[schemars(with = "Vec<RawCardDraft>")]
     drafts: Vec<Value>,
     #[serde(default = "default_true")]
     auto_renumber_cloze: bool,
@@ -79,42 +101,36 @@ struct CompileDraftsArgs {
     default_campo_estudo: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReviewBatchInformationArgs {
     qa_csv: String,
     cloze_csv: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct BatchPatchDraftArgs {
     draft: Map<String, Value>,
     updates: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-enum QualityNoteTypeArg {
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+enum StrictNoteTypeArg {
     QA,
     CL,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum EvidenceScopeArg {
-    Retrieval,
-    Context,
-    Notes,
+impl StrictNoteTypeArg {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::QA => "QA",
+            Self::CL => "CL",
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum ReviewVerdictArg {
-    Approve,
-    Revise,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct QualitySourceArg {
     id: String,
@@ -124,7 +140,19 @@ struct QualitySourceArg {
     text: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl From<QualitySourceArg> for QualitySource {
+    fn from(arg: QualitySourceArg) -> Self {
+        Self {
+            id: arg.id,
+            title: arg.title,
+            version: arg.version,
+            locator: arg.locator,
+            text: arg.text,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct QualityObligationArg {
     id: String,
@@ -132,19 +160,40 @@ struct QualityObligationArg {
     source_ids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl From<QualityObligationArg> for QualityObligation {
+    fn from(arg: QualityObligationArg) -> Self {
+        Self {
+            id: arg.id,
+            description: arg.description,
+            source_ids: arg.source_ids,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct QualityEvidenceArg {
     source_id: String,
     quote: String,
     locator: String,
-    scope: EvidenceScopeArg,
+    scope: EvidenceScope,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl From<QualityEvidenceArg> for QualityEvidence {
+    fn from(arg: QualityEvidenceArg) -> Self {
+        Self {
+            source_id: arg.source_id,
+            quote: arg.quote,
+            locator: arg.locator,
+            scope: arg.scope.as_str().to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct QualityBindingArg {
-    note_type: QualityNoteTypeArg,
+    note_type: StrictNoteTypeArg,
     source_row: i64,
     #[serde(default)]
     cloze_index: Option<i64>,
@@ -152,7 +201,19 @@ struct QualityBindingArg {
     evidence: Vec<QualityEvidenceArg>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl QualityBindingArg {
+    fn into_binding(self) -> QualityBinding {
+        QualityBinding {
+            note_type: self.note_type.as_str().to_owned(),
+            source_row: self.source_row as usize,
+            cloze_index: self.cloze_index.map(|idx| idx as usize),
+            obligation_ids: self.obligation_ids,
+            evidence: self.evidence.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ReviewDimensionsArg {
     source_fidelity: bool,
@@ -164,23 +225,107 @@ struct ReviewDimensionsArg {
     media_appropriate: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl From<ReviewDimensionsArg> for QualityDimensions {
+    fn from(arg: ReviewDimensionsArg) -> Self {
+        Self {
+            source_fidelity: arg.source_fidelity,
+            atomic_retrieval: arg.atomic_retrieval,
+            context_sufficient: arg.context_sufficient,
+            no_answer_leak: arg.no_answer_leak,
+            clinically_relevant: arg.clinically_relevant,
+            notes_appropriate: arg.notes_appropriate,
+            media_appropriate: arg.media_appropriate,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct QualityReviewArg {
-    note_type: QualityNoteTypeArg,
+    note_type: StrictNoteTypeArg,
     source_row: i64,
     #[serde(default)]
     cloze_index: Option<i64>,
     snapshot_hash: String,
     reviewer: String,
-    verdict: ReviewVerdictArg,
+    verdict: ReviewVerdict,
     rationale: String,
     dimensions: ReviewDimensionsArg,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl QualityReviewArg {
+    fn into_review(self) -> QualityReview {
+        QualityReview {
+            note_type: self.note_type.as_str().to_owned(),
+            source_row: self.source_row as usize,
+            cloze_index: self.cloze_index.map(|idx| idx as usize),
+            snapshot_hash: self.snapshot_hash,
+            reviewer: self.reviewer,
+            verdict: self.verdict.as_str().to_owned(),
+            rationale: self.rationale,
+            dimensions: self.dimensions.into(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityInputArgs {
+struct QualityPrepareArgs {
+    qa_csv: String,
+    cloze_csv: String,
+    #[serde(default)]
+    sources: Vec<QualitySourceArg>,
+    #[serde(default)]
+    obligations: Vec<QualityObligationArg>,
+    #[serde(default)]
+    bindings: Vec<QualityBindingArg>,
+}
+
+impl QualityPrepareArgs {
+    fn collect_range_violations(&self, violations: &mut Vec<InputViolation>) {
+        for (idx, binding) in self.bindings.iter().enumerate() {
+            if binding.source_row < 2 {
+                violations.push(InputViolation {
+                    code: "INVALID_SOURCE_ROW",
+                    path: format!("bindings[{idx}].source_row"),
+                    message: format!(
+                        "bindings[{idx}].source_row must be an integer >= 2, got {}",
+                        binding.source_row
+                    ),
+                });
+            }
+            if let Some(cloze_idx) = binding.cloze_index
+                && cloze_idx < 1
+            {
+                violations.push(InputViolation {
+                    code: "INVALID_CLOZE_INDEX",
+                    path: format!("bindings[{idx}].cloze_index"),
+                    message: format!(
+                        "bindings[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
+                    ),
+                });
+            }
+        }
+    }
+
+    fn into_prepare_input(self) -> QualityPrepareInput {
+        QualityPrepareInput {
+            qa_csv: self.qa_csv,
+            cloze_csv: self.cloze_csv,
+            sources: self.sources.into_iter().map(Into::into).collect(),
+            obligations: self.obligations.into_iter().map(Into::into).collect(),
+            bindings: self
+                .bindings
+                .into_iter()
+                .map(QualityBindingArg::into_binding)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct QualityEvaluateArgs {
     qa_csv: String,
     cloze_csv: String,
     #[serde(default)]
@@ -193,37 +338,74 @@ struct QualityInputArgs {
     reviews: Vec<QualityReviewArg>,
 }
 
-impl QualityInputArgs {
-    fn validate_ranges(&self) -> Result<(), String> {
+impl QualityEvaluateArgs {
+    fn collect_range_violations(&self, violations: &mut Vec<InputViolation>) {
         for (idx, binding) in self.bindings.iter().enumerate() {
             if binding.source_row < 2 {
-                return Err(format!(
-                    "bindings[{idx}].source_row must be an integer >= 2"
-                ));
+                violations.push(InputViolation {
+                    code: "INVALID_SOURCE_ROW",
+                    path: format!("bindings[{idx}].source_row"),
+                    message: format!(
+                        "bindings[{idx}].source_row must be an integer >= 2, got {}",
+                        binding.source_row
+                    ),
+                });
             }
             if let Some(cloze_idx) = binding.cloze_index
                 && cloze_idx < 1
             {
-                return Err(format!(
-                    "bindings[{idx}].cloze_index must be null or an integer >= 1"
-                ));
+                violations.push(InputViolation {
+                    code: "INVALID_CLOZE_INDEX",
+                    path: format!("bindings[{idx}].cloze_index"),
+                    message: format!(
+                        "bindings[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
+                    ),
+                });
             }
         }
 
         for (idx, review) in self.reviews.iter().enumerate() {
             if review.source_row < 2 {
-                return Err(format!("reviews[{idx}].source_row must be an integer >= 2"));
+                violations.push(InputViolation {
+                    code: "INVALID_SOURCE_ROW",
+                    path: format!("reviews[{idx}].source_row"),
+                    message: format!(
+                        "reviews[{idx}].source_row must be an integer >= 2, got {}",
+                        review.source_row
+                    ),
+                });
             }
             if let Some(cloze_idx) = review.cloze_index
                 && cloze_idx < 1
             {
-                return Err(format!(
-                    "reviews[{idx}].cloze_index must be null or an integer >= 1"
-                ));
+                violations.push(InputViolation {
+                    code: "INVALID_CLOZE_INDEX",
+                    path: format!("reviews[{idx}].cloze_index"),
+                    message: format!(
+                        "reviews[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
+                    ),
+                });
             }
         }
+    }
 
-        Ok(())
+    fn into_evaluate_input(self) -> QualityInput {
+        QualityInput {
+            qa_csv: self.qa_csv,
+            cloze_csv: self.cloze_csv,
+            sources: self.sources.into_iter().map(Into::into).collect(),
+            obligations: self.obligations.into_iter().map(Into::into).collect(),
+            bindings: self
+                .bindings
+                .into_iter()
+                .map(QualityBindingArg::into_binding)
+                .collect(),
+            reviews: self
+                .reviews
+                .into_iter()
+                .map(QualityReviewArg::into_review)
+                .collect(),
+        }
     }
 }
 
@@ -238,19 +420,26 @@ fn sanitize_error_text(raw: &str) -> String {
             }
         })
         .collect();
-    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= MAX_ERROR_MESSAGE_CHARS {
-        return collapsed;
+    cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn tool_error_payload(payload: ToolErrorPayload) -> CallToolResponse {
+    match serde_json::to_value(payload) {
+        Ok(val) => CallToolResult::structured_error(val).into(),
+        Err(err) => CallToolResult::structured_error(json!({
+            "error": err.to_string(),
+            "code": "SERIALIZE_ERROR"
+        }))
+        .into(),
     }
-    let truncated: String = collapsed.chars().take(MAX_ERROR_MESSAGE_CHARS).collect();
-    format!("{truncated}...")
 }
 
 fn tool_error(message: impl AsRef<str>) -> CallToolResponse {
-    CallToolResult::structured_error(json!({
-        "error": sanitize_error_text(message.as_ref()),
-    }))
-    .into()
+    tool_error_payload(ToolErrorPayload {
+        error: sanitize_error_text(message.as_ref()),
+        code: "INVALID_ARGUMENTS",
+        violations: Vec::new(),
+    })
 }
 
 fn tool_ok(value: Value) -> CallToolResponse {
@@ -267,30 +456,6 @@ fn parse_args<T: for<'de> Deserialize<'de>>(arguments: Option<JsonObject>) -> Re
     })
 }
 
-fn parse_quality_input(arguments: Option<JsonObject>) -> Result<QualityInput, String> {
-    let validated: QualityInputArgs = parse_args(arguments)?;
-    validated.validate_ranges()?;
-    let canonical_value = serde_json::to_value(&validated).map_err(|err| {
-        format!(
-            "Failed to normalize quality input: {}",
-            sanitize_error_text(&err.to_string())
-        )
-    })?;
-    serde_json::from_value::<QualityInput>(canonical_value).map_err(|err| {
-        format!(
-            "Invalid quality input: {}",
-            sanitize_error_text(&err.to_string())
-        )
-    })
-}
-
-fn schema_object(value: Value) -> Arc<JsonObject> {
-    match value {
-        Value::Object(map) => Arc::new(map),
-        _ => unreachable!("tool schema must be a JSON object"),
-    }
-}
-
 fn readonly_annotations() -> ToolAnnotations {
     ToolAnnotations::new()
         .read_only(true)
@@ -299,268 +464,69 @@ fn readonly_annotations() -> ToolAnnotations {
         .open_world(false)
 }
 
-fn quality_input_schema() -> Value {
-    json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["qa_csv", "cloze_csv"],
-        "properties": {
-            "qa_csv": {
-                "type": "string",
-                "description": "Pipe-delimited QA CSV content (header plus 0 or more rows)."
-            },
-            "cloze_csv": {
-                "type": "string",
-                "description": "Pipe-delimited Cloze CSV content (header plus 0 or more rows)."
-            },
-            "sources": {
-                "type": "array",
-                "default": [],
-                "description": "Authoritative source excerpts with version and locator metadata.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["id", "title", "version", "locator", "text"],
-                    "properties": {
-                        "id": { "type": "string" },
-                        "title": { "type": "string" },
-                        "version": { "type": "string" },
-                        "locator": { "type": "string" },
-                        "text": { "type": "string" }
-                    }
-                }
-            },
-            "obligations": {
-                "type": "array",
-                "default": [],
-                "description": "Clinical or decision obligations inventoried before card generation.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["id", "description", "source_ids"],
-                    "properties": {
-                        "id": { "type": "string" },
-                        "description": { "type": "string" },
-                        "source_ids": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }
-                    }
-                }
-            },
-            "bindings": {
-                "type": "array",
-                "default": [],
-                "description": "Bindings linking each QA row or Cloze index to obligations and source evidence.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["note_type", "source_row", "obligation_ids", "evidence"],
-                    "properties": {
-                        "note_type": {
-                            "type": "string",
-                            "enum": ["QA", "CL"]
-                        },
-                        "source_row": {
-                            "type": "integer",
-                            "minimum": 2
-                        },
-                        "cloze_index": {
-                            "type": ["integer", "null"],
-                            "minimum": 1
-                        },
-                        "obligation_ids": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        },
-                        "evidence": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["source_id", "quote", "locator", "scope"],
-                                "properties": {
-                                    "source_id": { "type": "string" },
-                                    "quote": { "type": "string" },
-                                    "locator": { "type": "string" },
-                                    "scope": {
-                                        "type": "string",
-                                        "enum": ["retrieval", "context", "notes"]
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            "reviews": {
-                "type": "array",
-                "default": [],
-                "description": "Independent editorial review records bound to snapshot_hash per QA row or Cloze index.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "note_type",
-                        "source_row",
-                        "snapshot_hash",
-                        "reviewer",
-                        "verdict",
-                        "rationale",
-                        "dimensions"
-                    ],
-                    "properties": {
-                        "note_type": {
-                            "type": "string",
-                            "enum": ["QA", "CL"]
-                        },
-                        "source_row": {
-                            "type": "integer",
-                            "minimum": 2
-                        },
-                        "cloze_index": {
-                            "type": ["integer", "null"],
-                            "minimum": 1
-                        },
-                        "snapshot_hash": { "type": "string" },
-                        "reviewer": { "type": "string" },
-                        "verdict": {
-                            "type": "string",
-                            "enum": ["approve", "revise"]
-                        },
-                        "rationale": { "type": "string" },
-                        "dimensions": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": [
-                                "source_fidelity",
-                                "atomic_retrieval",
-                                "context_sufficient",
-                                "no_answer_leak",
-                                "clinically_relevant",
-                                "notes_appropriate",
-                                "media_appropriate"
-                            ],
-                            "properties": {
-                                "source_fidelity": { "type": "boolean" },
-                                "atomic_retrieval": { "type": "boolean" },
-                                "context_sufficient": { "type": "boolean" },
-                                "no_answer_leak": { "type": "boolean" },
-                                "clinically_relevant": { "type": "boolean" },
-                                "notes_appropriate": { "type": "boolean" },
-                                "media_appropriate": { "type": "boolean" }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
+fn schema_for_args<T: JsonSchema>() -> Arc<JsonObject> {
+    let settings = SchemaSettings::draft2020_12().with(|s| {
+        s.inline_subschemas = true;
+    });
+    match settings
+        .into_generator()
+        .into_root_schema_for::<T>()
+        .to_value()
+    {
+        Value::Object(map) => Arc::new(map),
+        _ => unreachable!("tool schema must be a JSON object"),
+    }
 }
 
-fn build_tools() -> Vec<Tool> {
+static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(init_tools);
+
+#[cfg(test)]
+fn build_tools() -> &'static [Tool] {
+    TOOLS.as_slice()
+}
+
+fn init_tools() -> Vec<Tool> {
     let ann = readonly_annotations();
 
     let cards_compile_drafts = Tool::new(
         "cards_compile_drafts",
         "Normalize and compile structured QA/Cloze draft objects in memory into canonical pipe-delimited `qa_csv` and `cloze_csv` with structural diagnostics and statistics.",
-        schema_object(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["drafts"],
-            "properties": {
-                "drafts": {
-                    "type": "array",
-                    "description": "List of card draft objects (QA or Cloze) to normalize and compile.",
-                    "items": {
-                        "type": "object",
-                        "description": "Dynamic card draft object supporting canonical fields and aliases (`tipo`/`note_type`, `enunciado_ou_sentenca`, `resposta`, `campo_estudo`, `notas_adicionais`, `referencias`, `etiquetas`, `figuras`, `tabela_notas`, etc.)."
-                    }
-                },
-                "auto_renumber_cloze": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Sequentially renumber Cloze indices starting at c1 (default true)."
-                },
-                "auto_purge_id_leaks": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Strip leaked internal draft/card identifiers from text fields (default true)."
-                },
-                "default_campo_estudo": {
-                    "type": "string",
-                    "default": "",
-                    "description": "Fallback `Campo de Estudo` when omitted on individual drafts (default empty string)."
-                }
-            }
-        })),
+        schema_for_args::<CompileDraftsArgs>(),
     )
     .with_annotations(ann.clone());
 
     let review_batch_information = Tool::new(
         "review_batch_information",
         "Inspect compiled `qa_csv` and `cloze_csv` in memory and return per-card information profiles, token/character counts, and card totals without a fixed 20-card ceiling.",
-        schema_object(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["qa_csv", "cloze_csv"],
-            "properties": {
-                "qa_csv": {
-                    "type": "string",
-                    "description": "Pipe-delimited QA CSV string."
-                },
-                "cloze_csv": {
-                    "type": "string",
-                    "description": "Pipe-delimited Cloze CSV string."
-                }
-            }
-        })),
+        schema_for_args::<ReviewBatchInformationArgs>(),
     )
     .with_annotations(ann.clone());
 
     let quality_prepare = Tool::new(
         "quality_prepare",
-        "Prepare a deterministic quality snapshot (`snapshot_hash`) and per-retrieval inventory from compiled CSVs and optional quality bindings/sources/obligations/reviews.",
-        schema_object(quality_input_schema()),
+        "Prepare a deterministic quality snapshot (`snapshot_hash`) and per-retrieval inventory from compiled CSVs and optional quality bindings/sources/obligations.",
+        schema_for_args::<QualityPrepareArgs>(),
     )
     .with_annotations(ann.clone());
 
     let quality_evaluate = Tool::new(
         "quality_evaluate",
         "Evaluate source fidelity, obligation coverage, evidence bindings, and independent editorial reviews per QA row and Cloze index against the batch snapshot.",
-        schema_object(quality_input_schema()),
+        schema_for_args::<QualityEvaluateArgs>(),
     )
     .with_annotations(ann.clone());
 
     let batch_patch_draft = Tool::new(
         "batch_patch_draft",
         "Pure in-memory draft patcher: accepts `{draft, updates}` JSON objects and returns `{card}` with updated fields normalized. NOTE: This is NOT the path-based Python staging file API (`staging_path`/`card_index`/`patch_json`); it performs no disk reads or writes.",
-        schema_object(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["draft", "updates"],
-            "properties": {
-                "draft": {
-                    "type": "object",
-                    "description": "Existing single card draft JSON object to patch in memory."
-                },
-                "updates": {
-                    "type": "object",
-                    "description": "Field updates to merge into the draft object in memory (empty strings clear optional fields)."
-                }
-            }
-        })),
+        schema_for_args::<BatchPatchDraftArgs>(),
     )
     .with_annotations(ann.clone());
 
     let generation_contract_get = Tool::new(
         "generation_contract_get",
         "Return the normative `quality_v1` generation, review, media, field-ordering, limitation, and repair contract. Accepts `{}` only.",
-        schema_object(json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {}
-        })),
+        schema_for_args::<EmptyArgs>(),
     )
     .with_annotations(ann);
 
@@ -717,11 +683,11 @@ impl ServerHandler for AnkiQualityMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
-        std::future::ready(Ok(ListToolsResult::with_all_items(build_tools())))
+        std::future::ready(Ok(ListToolsResult::with_all_items(TOOLS.clone())))
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        build_tools().into_iter().find(|tool| tool.name == name)
+        TOOLS.iter().find(|tool| tool.name == name).cloned()
     }
 
     fn call_tool(
@@ -762,36 +728,59 @@ fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse
             match serde_json::to_value(&review) {
                 Ok(val) => Ok(tool_ok(val)),
                 Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize batch information review: {}",
-                    err
+                    "Failed to serialize batch information review: {err}"
                 ))),
             }
         }
         "quality_prepare" => {
-            let input = match parse_quality_input(request.arguments) {
+            let args: QualityPrepareArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
                 Err(msg) => return Ok(tool_error(msg)),
             };
-            let report = prepare_quality(&input);
+            let mut violations = Vec::new();
+            args.collect_range_violations(&mut violations);
+            if !violations.is_empty() {
+                return Ok(tool_error_payload(ToolErrorPayload {
+                    error: format!(
+                        "Invalid tool arguments: {} range violation(s) encountered",
+                        violations.len()
+                    ),
+                    code: "INVALID_INPUT_RANGES",
+                    violations,
+                }));
+            }
+            let input = args.into_prepare_input();
+            let report = prepare_quality_input(&input);
             match serde_json::to_value(&report) {
                 Ok(val) => Ok(tool_ok(val)),
                 Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize quality_prepare result: {}",
-                    err
+                    "Failed to serialize quality_prepare result: {err}"
                 ))),
             }
         }
         "quality_evaluate" => {
-            let input = match parse_quality_input(request.arguments) {
+            let args: QualityEvaluateArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
                 Err(msg) => return Ok(tool_error(msg)),
             };
+            let mut violations = Vec::new();
+            args.collect_range_violations(&mut violations);
+            if !violations.is_empty() {
+                return Ok(tool_error_payload(ToolErrorPayload {
+                    error: format!(
+                        "Invalid tool arguments: {} range violation(s) encountered",
+                        violations.len()
+                    ),
+                    code: "INVALID_INPUT_RANGES",
+                    violations,
+                }));
+            }
+            let input = args.into_evaluate_input();
             let report = evaluate_quality(&input);
             match serde_json::to_value(&report) {
                 Ok(val) => Ok(tool_ok(val)),
                 Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize quality_evaluate result: {}",
-                    err
+                    "Failed to serialize quality_evaluate result: {err}"
                 ))),
             }
         }
@@ -841,11 +830,21 @@ mod tests {
         }
     }
 
+    fn extract_error_payload(resp: &CallToolResponse) -> Value {
+        match resp {
+            CallToolResponse::Complete(res) => res
+                .structured_content
+                .clone()
+                .expect("structured error payload"),
+            _ => panic!("expected complete response"),
+        }
+    }
+
     fn assert_typed_schemas_strict(schema: &Value, path: &str) {
         let Some(obj) = schema.as_object() else {
             return;
         };
-        if obj.contains_key("properties") {
+        if obj.contains_key("properties") && !path.contains("drafts") {
             assert_eq!(
                 obj.get("additionalProperties"),
                 Some(&Value::Bool(false)),
@@ -879,7 +878,7 @@ mod tests {
         .collect();
         assert_eq!(names, expected);
 
-        for tool in &tools {
+        for tool in tools {
             let schema_val = tool.schema_as_json_value();
             assert_eq!(schema_val.get("additionalProperties"), Some(&json!(false)));
             assert_typed_schemas_strict(&schema_val, tool.name.as_ref());
@@ -907,7 +906,31 @@ mod tests {
     }
 
     #[test]
-    fn quality_validation_rejects_unknown_nested_fields_and_invalid_ranges() {
+    fn cards_compile_drafts_rejects_unknown_tipo() {
+        let resp = dispatch_tool_call(make_call(
+            "cards_compile_drafts",
+            json!({
+                "drafts": [{
+                    "tipo": "CLOZ",
+                    "enunciado_ou_sentenca": "Teste de cloze malformado"
+                }]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&resp));
+        let payload = extract_error_payload(&resp);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("CLOZ"),
+            "error should mention unsupported tipo CLOZ"
+        );
+    }
+
+    #[test]
+    fn quality_prepare_rejects_reviews_and_unknown_fields() {
         let unknown_top = dispatch_tool_call(make_call(
             "quality_prepare",
             json!({ "qa_csv": "", "cloze_csv": "", "bogus": 1 }),
@@ -915,49 +938,102 @@ mod tests {
         .expect("returns isError result");
         assert!(is_error_response(&unknown_top));
 
-        let bad_row = dispatch_tool_call(make_call(
-            "quality_evaluate",
-            json!({
-                "qa_csv": "",
-                "cloze_csv": "",
-                "bindings": [{
-                    "note_type": "QA",
-                    "source_row": 1,
-                    "obligation_ids": [],
-                    "evidence": []
-                }]
-            }),
-        ))
-        .expect("returns isError result");
-        assert!(is_error_response(&bad_row));
-
-        let bad_cloze_idx = dispatch_tool_call(make_call(
+        let with_reviews = dispatch_tool_call(make_call(
             "quality_prepare",
             json!({
                 "qa_csv": "",
                 "cloze_csv": "",
-                "reviews": [{
-                    "note_type": "CL",
-                    "source_row": 2,
-                    "cloze_index": 0,
-                    "snapshot_hash": "h",
-                    "reviewer": "rev",
-                    "verdict": "approve",
-                    "rationale": "ok",
-                    "dimensions": {
-                        "source_fidelity": true,
-                        "atomic_retrieval": true,
-                        "context_sufficient": true,
-                        "no_answer_leak": true,
-                        "clinically_relevant": true,
-                        "notes_appropriate": true,
-                        "media_appropriate": true
+                "reviews": []
+            }),
+        ))
+        .expect("quality_prepare must reject reviews");
+        assert!(is_error_response(&with_reviews));
+    }
+
+    #[test]
+    fn quality_evaluate_accumulates_all_row_and_cloze_range_violations() {
+        let bad_eval = dispatch_tool_call(make_call(
+            "quality_evaluate",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "bindings": [
+                    {
+                        "note_type": "QA",
+                        "source_row": 1,
+                        "obligation_ids": [],
+                        "evidence": []
+                    },
+                    {
+                        "note_type": "CL",
+                        "source_row": 3,
+                        "cloze_index": 0,
+                        "obligation_ids": [],
+                        "evidence": []
                     }
-                }]
+                ],
+                "reviews": [
+                    {
+                        "note_type": "QA",
+                        "source_row": 0,
+                        "snapshot_hash": "h",
+                        "reviewer": "r",
+                        "verdict": "approve",
+                        "rationale": "ok",
+                        "dimensions": {
+                            "source_fidelity": true,
+                            "atomic_retrieval": true,
+                            "context_sufficient": true,
+                            "no_answer_leak": true,
+                            "clinically_relevant": true,
+                            "notes_appropriate": true,
+                            "media_appropriate": true
+                        }
+                    },
+                    {
+                        "note_type": "CL",
+                        "source_row": 4,
+                        "cloze_index": 0,
+                        "snapshot_hash": "h",
+                        "reviewer": "r",
+                        "verdict": "revise",
+                        "rationale": "ok",
+                        "dimensions": {
+                            "source_fidelity": true,
+                            "atomic_retrieval": true,
+                            "context_sufficient": true,
+                            "no_answer_leak": true,
+                            "clinically_relevant": true,
+                            "notes_appropriate": true,
+                            "media_appropriate": true
+                        }
+                    }
+                ]
             }),
         ))
         .expect("returns isError result");
-        assert!(is_error_response(&bad_cloze_idx));
+        assert!(is_error_response(&bad_eval));
+
+        let payload = extract_error_payload(&bad_eval);
+        assert_eq!(payload["code"], json!("INVALID_INPUT_RANGES"));
+        let violations = payload["violations"].as_array().expect("violations array");
+        assert_eq!(
+            violations.len(),
+            4,
+            "all 4 range violations must be accumulated"
+        );
+
+        assert_eq!(violations[0]["path"], json!("bindings[0].source_row"));
+        assert_eq!(violations[0]["code"], json!("INVALID_SOURCE_ROW"));
+
+        assert_eq!(violations[1]["path"], json!("bindings[1].cloze_index"));
+        assert_eq!(violations[1]["code"], json!("INVALID_CLOZE_INDEX"));
+
+        assert_eq!(violations[2]["path"], json!("reviews[0].source_row"));
+        assert_eq!(violations[2]["code"], json!("INVALID_SOURCE_ROW"));
+
+        assert_eq!(violations[3]["path"], json!("reviews[1].cloze_index"));
+        assert_eq!(violations[3]["code"], json!("INVALID_CLOZE_INDEX"));
     }
 
     #[test]

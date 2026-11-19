@@ -1,7 +1,8 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 static EXTRACTOR_WRAPPER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -70,7 +71,7 @@ pub fn clean_extractor_caption(text: &str) -> String {
     s.trim().to_string()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MediaFigure {
     pub filename: String,
     #[serde(default)]
@@ -125,7 +126,8 @@ impl MediaFigure {
         } else if let Some(cls) = semantic_style_class(&style_key) {
             format!(r#" class="{cls}""#)
         } else {
-            format!(r#" style="{}""#, self.style)
+            let escaped_style = html_escape_attr(self.style.trim());
+            format!(r#" style="{escaped_style}""#)
         };
 
         let cap_tag = if cap.is_empty() {
@@ -134,12 +136,14 @@ impl MediaFigure {
             let cap_style = if self.caption_style.is_empty() {
                 String::new()
             } else {
-                format!(r#" style="{}""#, self.caption_style)
+                let escaped_cap_style = html_escape_attr(self.caption_style.trim());
+                format!(r#" style="{escaped_cap_style}""#)
             };
             format!("<figcaption{cap_style}>{cap}</figcaption>")
         };
 
-        format!(r#"<figure{fig_attr}><img src="{fn_trimmed}"{alt_attr}>{cap_tag}</figure>"#)
+        let escaped_fn = html_escape_attr(fn_trimmed);
+        format!(r#"<figure{fig_attr}><img src="{escaped_fn}"{alt_attr}>{cap_tag}</figure>"#)
     }
 }
 

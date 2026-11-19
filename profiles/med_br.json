@@ -1,0 +1,61 @@
+{
+  "id": "med_br",
+  "name": "Medicina Brasil (Residência Médica & Títulos)",
+  "description": "Perfil declarativo padrão para cartões médicos brasileiros (provas de residência, Revalida e títulos de especialista).",
+  "language": "pt-BR",
+  "default_max_note_chars": 1200,
+  "table_max_note_chars": 2500,
+  "exam_boilerplate": {
+    "enabled": true,
+    "known_labels": [
+      "USP", "UNIFESP", "UNICAMP", "UNESP", "IAMSPE", "FCMSCSP", "SUS-SP",
+      "ENARE", "PSU-MG", "PSU", "AMRIGS", "AMP", "SURCE", "SES-DF", "SES-PE",
+      "SES-RJ", "UFRJ", "UERJ", "UFMG", "UFPR", "UFRGS", "UFBA", "UFC", "UFPE",
+      "HCFMUSP", "HC-FMUSP", "HC-UFMG", "INCA", "INTO", "FHEMIG", "SCMSP",
+      "FAMERP", "FAMEMA", "REVALIDA", "ABN", "TE-ABN", "AMB", "CFM", "CBR",
+      "SBC", "SBN"
+    ],
+    "phrase_patterns": [
+      "(?:(?:prova|quest[aã]o|banca|concurso|exame|fonte|ref(?:er[eê]ncia)?)s?\\s*(?:d[aoe]s?\\s*)?:?\\s*)?(?:[\\(\\[]?\\b(?:{LABELS})\\b[\\)\\]]?(?:\\s*[-/–]?\\s*(?:(?:19|20)\\d{2}|'?\\d{2}))?[\\)\\]]?)(?:\\s*(?:[,;/&+–-]|\\be\\b)\\s*[\\(\\[]?\\b(?:{LABELS})\\b[\\)\\]]?(?:\\s*[-/–]?\\s*(?:(?:19|20)\\d{2}|'?\\d{2}))?[\\)\\]]?)*",
+      "(?:(?:aten[cç][aã]o|dica|nota|obs\\.?|observa[cç][aã]o|prova|alerta)\\s*[:\\-–—]\\s*)?(?:(?:tema|assunto|conceito|t[oó]pico|ponto|detalhe|quest[aã]o)\\s+)?(?:muito\\s+|frequentemente\\s+|bastante\\s+|sempre\\s+|classic(?:amente)?\\s+)?(?:cobrad[oa]s?|pedid[oa]s?|exigid[oa]s?|abordad[oa]s?|recorrente|cl[aá]ssic[oa]|favorit[oa]|queridinh[oa]|prevalente|frequente|incidente)\\s*(?:em|nas?|nos?|pel[ao]s?|d[aoe]s?)\\s*(?:provas?|quest[oõ]es|concursos?|exames?|bancas?|resid[eê]ncia(?:\\s+m[eé]dica)?|\\b(?:{LABELS})\\b)(?:\\s+(?:de\\s+resid[eê]ncia(?:\\s+m[eé]dica)?|m[eé]dic[ao]s?|d[aoe]s?\\s+\\b(?:{LABELS})\\b|e\\s+\\b(?:{LABELS})\\b|\\b(?:{LABELS})\\b|(?:de\\s+)?\\(?(?:19|20)\\d{2}\\)?))*",
+      "(?:(?:aten[cç][aã]o|dica|nota|obs\\.?|observa[cç][aã]o|prova|alerta)\\s*[:\\-–—]\\s*)?(?:cai|costuma\\s+cair|caiu|j[aá]\\s+caiu|sempre\\s+cai)\\s+(?:muito\\s+|bastante\\s+|frequentemente\\s+|sempre\\s+)?(?:em|nas?|nos?)\\s+(?:provas?|quest[oõ]es|concursos?|exames?|resid[eê]ncia(?:\\s+m[eé]dica)?|\\b(?:{LABELS})\\b)(?:\\s+(?:de\\s+resid[eê]ncia(?:\\s+m[eé]dica)?|d[aoe]s?\\s+\\b(?:{LABELS})\\b|e\\s+\\b(?:{LABELS})\\b|\\b(?:{LABELS})\\b|(?:de\\s+)?\\(?(?:19|20)\\d{2}\\)?))*",
+      "(?:(?:aten[cç][aã]o|dica|nota|obs\\.?|observa[cç][aã]o|prova|alerta)\\s*[:\\-–—]\\s*)?(?:pegadinha|armadilha|foco|aten[cç][aã]o|cuidado|olho|dica|alerta|cl[aá]ssico)\\s*(?:cl[aá]ssic[ao]\\s+)?(?:d[aoe]s?|para\\s+as?|em|nas?|nos?)\\s*(?:provas?|quest[oõ]es|concursos?|exames?|bancas?|resid[eê]ncia(?:\\s+m[eé]dica)?|\\b(?:{LABELS})\\b)(?:\\s+(?:de\\s+resid[eê]ncia(?:\\s+m[eé]dica)?|d[aoe]s?\\s+\\b(?:{LABELS})\\b|\\b(?:{LABELS})\\b|(?:de\\s+)?\\(?(?:19|20)\\d{2}\\)?))*",
+      "(?:(?:aten[cç][aã]o|dica|nota|obs\\.?|observa[cç][aã]o|prova|alerta)\\s*[:\\-–—]\\s*)?(?:alta\\s+incid[eê]ncia|muito\\s+incidente|alto\\s+rendimento|high[-\\s]?yield)\\s*(?:em|nas?|nos?)\\s*(?:provas?|concursos?|exames?|resid[eê]ncia(?:\\s+m[eé]dica)?|\\b(?:{LABELS})\\b)(?:\\s+(?:de\\s+resid[eê]ncia(?:\\s+m[eé]dica)?|d[aoe]s?\\s+\\b(?:{LABELS})\\b|\\b(?:{LABELS})\\b|(?:de\\s+)?\\(?(?:19|20)\\d{2}\\)?))*"
+    ]
+  },
+  "info_policy": {
+    "source_fidelity": "Toda afirmação clínica, critério diagnóstico, dose e conduta deve ser fiel à fonte fornecida, sem extrapolações externas.",
+    "notes_purpose": "Notas vazias ou curtas são permitidas sem volume mínimo; profundidade varia conforme dificuldade e fonte autorizada, mantendo-se na mesma unidade.",
+    "forbid_metadata_headers": true,
+    "forbid_verbatim_answer_restatement": true,
+    "forbid_exam_only_mentions": true,
+    "preferred_list_format": "• <b>Tópico:</b> Explicação concisa."
+  },
+  "editorial_checklist": [
+    {
+      "id": "atomicity",
+      "label": "Atomicidade clínica",
+      "description": "Cada cartão testa um único conceito, critério ou decisão clínica sem sobrecarga cognitiva."
+    },
+    {
+      "id": "source_fidelity",
+      "label": "Fidelidade à fonte",
+      "description": "Valores de corte, condutas e justificativas correspondem exatamente ao material-base."
+    },
+    {
+      "id": "pedagogical_notes",
+      "label": "Notas pedagógicas (sem ruído de banca)",
+      "description": "Notas Adicionais explicam o porquê da resposta; menções isoladas a provas ou bancas são removidas ou acompanhadas de explicação útil."
+    },
+    {
+      "id": "no_internal_metadata",
+      "label": "Ausência de metadados internos",
+      "description": "Não há cabeçalhos como ID:, Âncora:, Cross-ref: ou Relevância: nos campos visíveis."
+    },
+    {
+      "id": "clean_html_style",
+      "label": "Formatação HTML padronizada",
+      "description": "Listas usam o padrão '• <b>Tópico:</b> ...' e tabelas comparativas respeitam o limite estendido de caracteres visíveis."
+    }
+  ]
+}
