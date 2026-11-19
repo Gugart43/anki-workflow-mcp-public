@@ -2,12 +2,14 @@
 name = "anki-domain"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

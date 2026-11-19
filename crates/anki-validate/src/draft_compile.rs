@@ -6,30 +6,13 @@ use crate::cloze_renumber::renumber_cloze;
 use crate::draft_normalize::normalize_draft;
 use crate::id_leak::purge_id_leak;
 use crate::image_alias::unique_figures;
+use crate::legacy_adapter::{DraftNotesInput, compile_extra_notes};
 use crate::media_figure::render_media_figure;
-use crate::notes_render::render_extra_notes;
+use crate::note_model::CompileMode;
 use crate::sanitize::sanitize_field;
 use crate::study_field::infer_campo_estudo;
-use crate::table_render::{TableSpec, markdown_tables_to_html};
 
-const QA_FIELDS: [&str; 7] = [
-    "Enunciado",
-    "Resposta",
-    "Campo de Estudo",
-    "Notas Adicionais",
-    "Imagens Relacionadas",
-    "Referências",
-    "Etiquetas",
-];
-
-const CLOZE_FIELDS: [&str; 6] = [
-    "Sentença",
-    "Notas Adicionais",
-    "Campo de Estudo",
-    "Imagens Relacionadas",
-    "Referências",
-    "Etiquetas",
-];
+use anki_domain::{CLOZE_FIELDS, QA_FIELDS};
 
 fn write_csv(headers: &[&str], rows: &[Vec<String>]) -> String {
     if rows.is_empty() {
@@ -41,55 +24,6 @@ fn write_csv(headers: &[&str], rows: &[Vec<String>]) -> String {
         lines.push(row.join("|"));
     }
     lines.join("\n")
-}
-
-fn parse_table_spec(value: &Value) -> Result<TableSpec, String> {
-    let obj = value
-        .as_object()
-        .ok_or_else(|| "tabela_notas must be an object".to_string())?;
-
-    let caption = match obj.get("caption") {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(_) => return Err("tabela_notas.caption must be a string".to_string()),
-    };
-
-    let headers_val = obj
-        .get("headers")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "tabela_notas.headers must be an array".to_string())?;
-    let mut headers = Vec::with_capacity(headers_val.len());
-    for h in headers_val {
-        let s = h
-            .as_str()
-            .ok_or_else(|| "tabela_notas.headers items must be strings".to_string())?;
-        headers.push(s.to_string());
-    }
-
-    let rows_val = obj
-        .get("rows")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "tabela_notas.rows must be an array".to_string())?;
-    let mut rows = Vec::with_capacity(rows_val.len());
-    for r in rows_val {
-        let row_arr = r
-            .as_array()
-            .ok_or_else(|| "tabela_notas.rows items must be arrays".to_string())?;
-        let mut row = Vec::with_capacity(row_arr.len());
-        for cell in row_arr {
-            let s = cell
-                .as_str()
-                .ok_or_else(|| "tabela_notas.rows cells must be strings".to_string())?;
-            row.push(s.to_string());
-        }
-        rows.push(row);
-    }
-
-    Ok(TableSpec {
-        caption,
-        headers,
-        rows,
-    })
 }
 
 pub fn compile_drafts(
@@ -171,85 +105,20 @@ pub fn compile_drafts(
             }
         }
 
-        // 3. Format 'Notas Adicionais'
-        let mut extra_source_refs: Vec<String> = Vec::new();
-        let mut rendered_notes = match obj.get("notas_adicionais") {
-            Some(Value::Object(_)) => {
-                let notes_val = obj.get("notas_adicionais").unwrap();
-                let (html, refs, tbl_count) = render_extra_notes(notes_val)?;
-                tables_rendered += tbl_count;
-                extra_source_refs = refs;
-                html
-            }
-            Some(Value::String(s)) => {
-                let (html, tbl_count) = markdown_tables_to_html(s);
-                tables_rendered += tbl_count;
-                html
-            }
-            Some(Value::Null) | None => String::new(),
-            Some(_) => {
-                return Err("notas_adicionais must be an object, string, or null".to_string());
-            }
+        // 3. Format 'Notas Adicionais' via single compiler path (F2 / legacy_adapter)
+        let notes_input = DraftNotesInput {
+            notas_adicionais: obj.get("notas_adicionais"),
+            tabela_notas: obj.get("tabela_notas"),
+            tabelas_notas: obj.get("tabelas_notas"),
+            figuras_notas: obj.get("figuras_notas"),
         };
+        let compiled_notes = compile_extra_notes(&notes_input, CompileMode::LegacyCompat)
+            .map_err(|e| e.to_string())?;
 
-        if let Some(tbl_val) = obj.get("tabela_notas")
-            && !tbl_val.is_null()
-        {
-            let spec = parse_table_spec(tbl_val)?;
-            let tbl_html = spec.render_html()?;
-            if rendered_notes.is_empty() {
-                rendered_notes = tbl_html;
-            } else {
-                rendered_notes = format!("{rendered_notes}<br>{tbl_html}");
-            }
-            tables_rendered += 1;
-        }
+        tables_rendered += compiled_notes.rendered.table_count;
 
-        if let Some(tbls_val) = obj.get("tabelas_notas")
-            && !tbls_val.is_null()
-        {
-            let arr = tbls_val
-                .as_array()
-                .ok_or_else(|| "tabelas_notas must be an array".to_string())?;
-            for tbl_val in arr {
-                let spec = parse_table_spec(tbl_val)?;
-                let tbl_html = spec.render_html()?;
-                if rendered_notes.is_empty() {
-                    rendered_notes = tbl_html;
-                } else {
-                    rendered_notes = format!("{rendered_notes}<br>{tbl_html}");
-                }
-                tables_rendered += 1;
-            }
-        }
-
-        let (mut clean_notes, _) = sanitize_field(&rendered_notes, false, true);
-
-        if let Some(note_figs_val) = obj.get("figuras_notas")
-            && !note_figs_val.is_null()
-        {
-            let note_figs = match note_figs_val {
-                Value::Array(arr) => unique_figures(None, arr),
-                Value::Object(_) => unique_figures(Some(note_figs_val), &[]),
-                _ => return Err("figuras_notas must be an object, array, or null".to_string()),
-            };
-            if !note_figs.is_empty() {
-                let mut figs_buf = String::new();
-                for fig in &note_figs {
-                    let figure: crate::media_figure::MediaFigure =
-                        serde_json::from_value(fig.clone()).map_err(|e| e.to_string())?;
-                    figs_buf.push_str(&render_media_figure(&figure));
-                }
-                let (clean_note_figs, _) = sanitize_field(&figs_buf, true, false);
-                if !clean_note_figs.is_empty() {
-                    if clean_notes.is_empty() {
-                        clean_notes = clean_note_figs;
-                    } else {
-                        clean_notes = format!("{clean_notes}<br>{clean_note_figs}");
-                    }
-                }
-            }
-        }
+        // Exactly one sanitization allowing notes figures and tables
+        let (clean_notes, _) = sanitize_field(&compiled_notes.rendered.html, true, false);
 
         // 4. Format 'Imagens Relacionadas'
         let figs = unique_figures(
@@ -272,36 +141,41 @@ pub fn compile_drafts(
         };
         let (clean_img, _) = sanitize_field(&rendered_img, true, false);
 
-        // 5. Format References and Tags
-        let mut refs_str = match obj.get("referencias") {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" &#124; "),
-            Some(Value::String(s)) => s.trim().to_string(),
-            Some(Value::Null) | None => String::new(),
-            Some(_) => return Err("referencias must be an array, string, or null".to_string()),
-        };
+        // 5. Format References and Tags with exact deduplication
+        let mut all_refs: Vec<String> = Vec::new();
+        let mut seen_refs: HashSet<String> = HashSet::new();
 
-        if !extra_source_refs.is_empty() {
-            let mut known_refs: HashSet<String> = refs_str
-                .split(" &#124; ")
-                .map(|s| s.trim().to_string())
-                .collect();
-            for r in extra_source_refs {
-                if !known_refs.contains(&r) {
-                    if refs_str.is_empty() {
-                        refs_str = r.clone();
-                    } else {
-                        refs_str = format!("{refs_str} &#124; {r}");
+        match obj.get("referencias") {
+            Some(Value::Array(arr)) => {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() && seen_refs.insert(trimmed.to_string()) {
+                            all_refs.push(trimmed.to_string());
+                        }
                     }
-                    known_refs.insert(r);
                 }
             }
+            Some(Value::String(s)) => {
+                for part in s.split("&#124;") {
+                    let trimmed = part.trim();
+                    if !trimmed.is_empty() && seen_refs.insert(trimmed.to_string()) {
+                        all_refs.push(trimmed.to_string());
+                    }
+                }
+            }
+            Some(Value::Null) | None => {}
+            Some(_) => return Err("referencias must be an array, string, or null".to_string()),
         }
+
+        for r in compiled_notes.rendered.source_refs {
+            let trimmed = r.trim().to_string();
+            if !trimmed.is_empty() && seen_refs.insert(trimmed.clone()) {
+                all_refs.push(trimmed);
+            }
+        }
+
+        let refs_str = all_refs.join(" &#124; ");
         let (clean_refs, _) = sanitize_field(&refs_str, false, false);
 
         let mut tags_vec: Vec<String> = Vec::new();
@@ -321,10 +195,12 @@ pub fn compile_drafts(
             }
             Some(Value::String(s)) => {
                 let trimmed = s.trim();
-                if !trimmed.is_empty() {
-                    tags_vec.push(trimmed.to_string());
+                let mut parts = Vec::new();
+                for word in trimmed.split_whitespace() {
+                    tags_vec.push(word.to_string());
+                    parts.push(word.to_string());
                 }
-                trimmed.to_string()
+                parts.join(" ")
             }
             Some(Value::Null) | None => String::new(),
             Some(_) => return Err("etiquetas must be an array, string, or null".to_string()),
@@ -450,12 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_tipo_falls_back_to_qa_like_legacy() {
+    fn unsupported_tipo_returns_err() {
         let draft = json!({"tipo": "INVALID", "enunciado_ou_sentenca": "Texto"});
-        let result =
-            compile_drafts(&[draft], true, true, "").expect("legacy normalizes unknown type");
-        assert_eq!(result["stats"]["qa_count"], 1);
-        assert_eq!(result["stats"]["cloze_count"], 0);
+        assert!(compile_drafts(&[draft], true, true, "").is_err());
     }
 
     #[test]
@@ -505,7 +378,7 @@ mod tests {
         assert_eq!(result["stats"]["tables_rendered"], 2);
         let qa_csv = result["qa_csv"].as_str().unwrap();
         let notes = qa_csv.lines().nth(1).unwrap().split('|').nth(3).unwrap();
-        assert!(notes.contains("<table>"));
+        assert!(notes.contains("<table class=\"anki-table\">"));
         assert!(notes.contains("<figure"));
         assert!(notes.contains("<figcaption>"));
         assert!(notes.contains("neuro_fluxo_sintetico.png"));

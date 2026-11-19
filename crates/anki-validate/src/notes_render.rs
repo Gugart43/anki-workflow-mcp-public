@@ -10,7 +10,7 @@ use crate::table_render::{TableSpec, markdown_tables_to_html};
 #[serde(deny_unknown_fields)]
 struct NoteSource {
     fonte: String,
-    pagina: u64,
+    pagina: std::num::NonZeroU64,
     trecho: String,
 }
 
@@ -18,9 +18,6 @@ impl NoteSource {
     fn validate(&self) -> Result<(), String> {
         if self.fonte.trim().is_empty() {
             return Err("NoteSource.fonte must not be empty".to_string());
-        }
-        if self.pagina < 1 {
-            return Err("NoteSource.pagina must be >= 1".to_string());
         }
         if self.trecho.trim().is_empty() {
             return Err("NoteSource.trecho must not be empty".to_string());
@@ -316,5 +313,18 @@ mod tests {
             ]
         });
         assert!(render_extra_notes(&bad_block).is_err());
+
+        let zero_page_block = json!({
+            "blocos": [
+                {
+                    "tipo": "paragrafo",
+                    "texto": "Texto",
+                    "fontes": [
+                        {"fonte": "Livro", "pagina": 0, "trecho": "Trecho"}
+                    ]
+                }
+            ]
+        });
+        assert!(render_extra_notes(&zero_page_block).is_err());
     }
 }

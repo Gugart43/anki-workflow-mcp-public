@@ -664,7 +664,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     // ── QA.ID_IN_TEXT ────────────────────────────────────────────────────────
     if ID_IN_TEXT_RE.is_match(enunciado) {
         let mut d = Diagnostic::new(
-            "QA.ID_IN_TEXT",
+            anki_domain::DiagnosticCode::from_static("QA.ID_IN_TEXT"),
             Severity::Critical,
             "anki-qa-designer",
             "Visible card ID found in question stem. IDs must reside in tags or metadata, not in the prompt.",
@@ -679,7 +679,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     // ── QA.YESNO ─────────────────────────────────────────────────────────────
     if YESNO_ANSWER_RE.is_match(resposta) {
         let mut d = Diagnostic::new(
-            "QA.YESNO",
+            anki_domain::DiagnosticCode::from_static("QA.YESNO"),
             Severity::Critical,
             "anki-qa-designer",
             format!("Answer is a yes/no value: '{}'", resposta.trim()),
@@ -693,7 +693,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
     if YESNO_STEM_RE.is_match(enunciado) {
         let mut d = Diagnostic::new(
-            "QA.YESNO",
+            anki_domain::DiagnosticCode::from_static("QA.YESNO"),
             Severity::Critical,
             "anki-qa-designer",
             "Stem appears to be a true/false or yes/no question",
@@ -708,7 +708,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     // ── QA.MC_EMBED ──────────────────────────────────────────────────────────
     if MC_RE.is_match(enunciado) {
         let mut d = Diagnostic::new(
-            "QA.MC_EMBED",
+            anki_domain::DiagnosticCode::from_static("QA.MC_EMBED"),
             Severity::Critical,
             "anki-qa-designer",
             "Stem contains embedded multiple-choice options (a)/b)/c) pattern)",
@@ -726,7 +726,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     let item_count = candidate_items.len();
     if item_count >= 3 {
         let mut d = Diagnostic::new(
-            "QA.CARDINALITY",
+            anki_domain::DiagnosticCode::from_static("QA.CARDINALITY"),
             Severity::Critical,
             "anki-qa-designer",
             format!("Answer appears to enumerate ~{item_count} items (≥3) — review unit granularity"),
@@ -744,7 +744,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     // ── QA.CONTEXT_WARN ──────────────────────────────────────────────────────
     if !CONTEXT_MARKERS_RE.is_match(enunciado) {
         let mut d = Diagnostic::new(
-            "QA.CONTEXT_WARN",
+            anki_domain::DiagnosticCode::from_static("QA.CONTEXT_WARN"),
             Severity::Warn,
             "anki-qa-designer",
             "Stem lacks explicit clinical context (patient/guideline/condition/population)",
@@ -765,7 +765,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
         && has_bare_number(&cleaned_num)
     {
         let mut d = Diagnostic::new(
-            "QA.NUMBER_UNIT",
+            anki_domain::DiagnosticCode::from_static("QA.NUMBER_UNIT"),
             Severity::Warn,
             "anki-qa-designer",
             "Answer contains a bare number without unit or direction (≥/≤/>/< + unit)",
@@ -784,7 +784,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     let coordinated_q = COORDINATED_Q_RE.is_match(&stem_text);
     if question_marks > 1 || coordinated_q {
         let mut d = Diagnostic::new(
-            "CARD.SPLIT_QA_MULTI_QUESTION",
+            anki_domain::DiagnosticCode::from_static("CARD.SPLIT_QA_MULTI_QUESTION"),
             Severity::Warn,
             "anki-card-generator",
             "Enunciado com mais de uma pergunta: o cartão cobra duas obrigações",
@@ -804,7 +804,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     if stem_len > 200 {
         let threshold = if stem_len > 350 { 350 } else { 200 };
         let mut d = Diagnostic::new(
-            "CARD.TOO_LONG_STEM",
+            anki_domain::DiagnosticCode::from_static("CARD.TOO_LONG_STEM"),
             Severity::Warn,
             "anki-card-generator",
             format!(
@@ -825,7 +825,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     if ans_len > 240 {
         let threshold = if ans_len > 400 { 400 } else { 240 };
         let mut d = Diagnostic::new(
-            "CARD.TOO_LONG_ANSWER",
+            anki_domain::DiagnosticCode::from_static("CARD.TOO_LONG_ANSWER"),
             Severity::Warn,
             "anki-card-generator",
             format!(

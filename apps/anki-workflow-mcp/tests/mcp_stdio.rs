@@ -183,6 +183,12 @@ fn extract_tool_payload(response: &Value) -> Value {
 }
 
 fn assert_typed_objects_deny_additional_properties(schema: &Value, path: &str) {
+    // `cards_compile_drafts.properties.drafts.items` exposes `RawCardDraft` for client documentation,
+    // while `normalize_draft` intentionally tolerates unknown/alias keys on legacy card drafts.
+    if path.starts_with("cards_compile_drafts.properties.drafts.items") {
+        return;
+    }
+
     let Some(obj) = schema.as_object() else {
         return;
     };
@@ -344,6 +350,18 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
                 &props["obligations"]["items"],
                 &props["bindings"]["items"],
                 &props["bindings"]["items"]["properties"]["evidence"]["items"],
+            ] {
+                assert_eq!(
+                    nested_path.get("additionalProperties"),
+                    Some(&json!(false)),
+                    "quality nested object in {name} must set additionalProperties: false: {nested_path}"
+                );
+            }
+        }
+
+        if name == "quality_evaluate" {
+            let props = &schema["properties"];
+            for nested_path in [
                 &props["reviews"]["items"],
                 &props["reviews"]["items"]["properties"]["dimensions"],
             ] {
@@ -626,6 +644,61 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         })),
     );
     assert_eq!(bad_quality_resp["result"]["isError"], json!(true));
+
+    // 9b. quality_prepare rejects reviews field
+    let prep_with_reviews_resp = client.request(
+        90,
+        "tools/call",
+        Some(json!({
+            "name": "quality_prepare",
+            "arguments": {
+                "qa_csv": "",
+                "cloze_csv": "",
+                "reviews": []
+            }
+        })),
+    );
+    assert_eq!(prep_with_reviews_resp["result"]["isError"], json!(true));
+
+    // 9c. quality_evaluate accumulates structured range violations
+    let eval_range_violations_resp = client.request(
+        91,
+        "tools/call",
+        Some(json!({
+            "name": "quality_evaluate",
+            "arguments": {
+                "qa_csv": "",
+                "cloze_csv": "",
+                "bindings": [
+                    {
+                        "note_type": "QA",
+                        "source_row": 1,
+                        "obligation_ids": [],
+                        "evidence": []
+                    },
+                    {
+                        "note_type": "CL",
+                        "source_row": 3,
+                        "cloze_index": 0,
+                        "obligation_ids": [],
+                        "evidence": []
+                    }
+                ]
+            }
+        })),
+    );
+    assert_eq!(eval_range_violations_resp["result"]["isError"], json!(true));
+    let eval_violation_payload = extract_tool_payload(&eval_range_violations_resp);
+    assert_eq!(
+        eval_violation_payload["code"],
+        json!("INVALID_INPUT_RANGES")
+    );
+    let vios = eval_violation_payload["violations"]
+        .as_array()
+        .expect("violations array");
+    assert_eq!(vios.len(), 2);
+    assert_eq!(vios[0]["code"], json!("INVALID_SOURCE_ROW"));
+    assert_eq!(vios[1]["code"], json!("INVALID_CLOZE_INDEX"));
 
     // 10. Unknown tool name => MCP method/tool not found (-32601)
     let unknown_tool_resp = client.request(

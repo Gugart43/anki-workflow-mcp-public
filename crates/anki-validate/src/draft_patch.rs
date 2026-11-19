@@ -1,6 +1,36 @@
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
 
+fn canonical_alias_key(key: &str) -> &'static str {
+    match key {
+        "note_type" | "tipo" => "tipo",
+        "pergunta" | "sentenca" | "enunciado" | "enunciado_ou_sentenca" => "enunciado_ou_sentenca",
+        "campo_de_estudo" | "campo" | "area" | "study_field" | "field_of_study"
+        | "especialidade" | "campo_estudo" => "campo_estudo",
+        "notas" | "notas_adicionais" => "notas_adicionais",
+        "fonte" | "referencias" => "referencias",
+        "tags" | "etiquetas" => "etiquetas",
+        _ => "",
+    }
+}
+
+const ALIAS_GROUPS: &[&[&str]] = &[
+    &["note_type", "tipo"],
+    &["pergunta", "sentenca", "enunciado", "enunciado_ou_sentenca"],
+    &[
+        "campo_de_estudo",
+        "campo",
+        "area",
+        "study_field",
+        "field_of_study",
+        "especialidade",
+        "campo_estudo",
+    ],
+    &["notas", "notas_adicionais"],
+    &["fonte", "referencias"],
+    &["tags", "etiquetas"],
+];
+
 pub fn patch_draft(draft: &Value, updates: &Map<String, Value>) -> Result<Value, String> {
     let mut card_val = crate::draft_normalize::normalize_draft(draft)?;
     let card_obj = card_val
@@ -8,7 +38,20 @@ pub fn patch_draft(draft: &Value, updates: &Map<String, Value>) -> Result<Value,
         .ok_or_else(|| "Normalized draft must be a JSON object".to_string())?;
 
     for (k, v) in updates {
-        card_obj.insert(k.clone(), v.clone());
+        let canonical = canonical_alias_key(k);
+        if !canonical.is_empty() {
+            for group in ALIAS_GROUPS {
+                if group.contains(&canonical) {
+                    for &alias in *group {
+                        card_obj.remove(alias);
+                    }
+                    break;
+                }
+            }
+            card_obj.insert(canonical.to_string(), v.clone());
+        } else {
+            card_obj.insert(k.clone(), v.clone());
+        }
     }
 
     crate::draft_normalize::normalize_draft(&card_val)
@@ -121,5 +164,40 @@ mod tests {
         let updates = Map::new();
         let res = patch_draft(&invalid, &updates);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_patch_draft_canonicalizes_alias_keys_and_avoids_duplicates() {
+        let draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta antiga?",
+            "resposta": "Resposta antiga.",
+            "etiquetas": ["tag1"]
+        });
+        let mut updates = Map::new();
+        updates.insert("pergunta".to_string(), json!("Pergunta nova?"));
+        updates.insert("tags".to_string(), json!(["tag_nova"]));
+
+        let patched = patch_draft(&draft, &updates).expect("patch should succeed");
+        assert_eq!(patched["enunciado_ou_sentenca"], json!("Pergunta nova?"));
+        assert_eq!(patched["etiquetas"], json!(["tag_nova"]));
+        assert!(patched.get("pergunta").is_none());
+        assert!(patched.get("tags").is_none());
+    }
+
+    #[test]
+    fn test_patch_draft_preserves_images_alias() {
+        let draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta?",
+            "resposta": "Resposta."
+        });
+        let mut updates = Map::new();
+        updates.insert("images".to_string(), json!("<img src='clinical_view.png'>"));
+
+        let patched = patch_draft(&draft, &updates).expect("patch should succeed");
+        let figuras = patched["figuras"].as_array().expect("figuras array");
+        assert_eq!(figuras.len(), 1);
+        assert_eq!(figuras[0]["filename"], "clinical_view.png");
     }
 }

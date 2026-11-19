@@ -192,7 +192,13 @@ fn make_cloze_diag(
     owner: &'static str,
     suggestion: Option<String>,
 ) -> Diagnostic {
-    let mut diag = Diagnostic::new(code, severity, owner, message).with_field(field);
+    let mut diag = Diagnostic::new(
+        anki_domain::DiagnosticCode::from_static(code),
+        severity,
+        owner,
+        message,
+    )
+    .with_field(field);
     if let Some(r) = row {
         diag = diag.with_row(r);
     }

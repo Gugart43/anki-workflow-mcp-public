@@ -1,7 +1,7 @@
 # ADR-003: Perfis de Compatibilidade (`legacy_compat` vs `strict_v2`)
 
-- **Status:** Aceito (Arquitetura-alvo / Parcialmente implementado)
-- **Status de Implementação:** Parcialmente implementado. No domínio Rust, os perfis `legacy_compat` e `strict_v2` estão formalizados. No motor `quality_v1`, `strict_v2` opera em memória sem teto fixo de 20 cartões e com avaliação individual por unidade de recuperação (QA e índices Cloze distintos). O bloqueio transacional de `manifesto_commit` e `export_final` via `ValidationAttestation` em SQLite permanece como arquitetura-alvo, pois essas operações com disco continuam sob a camada Python.
+- **Status:** Accepted (Partially Implemented)
+- **Status de Implementação:** Perfil `strict_v2` ativo para validação em memória; matriz de 7 fases em SQLite não implementada.
 - **Data:** 2026-11-14
 - **Relacionado:** ADR-001, Seção 1.4 e Seção 3.4 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 

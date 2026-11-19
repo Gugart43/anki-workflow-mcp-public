@@ -56,7 +56,10 @@ pub fn escape_cell(text: &str) -> String {
     reopened.replace('|', "&#124;")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TableSpec {
     #[serde(default)]
     pub caption: String,

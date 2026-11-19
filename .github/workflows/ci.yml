@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 on:
   push:
@@ -6,63 +6,123 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
-env:
-  PYTHONPATH: src
-
 jobs:
   rust:
-    name: Rust & Parity (${{ matrix.os }})
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Format check
+      - name: Check formatting
         run: cargo fmt --all -- --check
-
-      - name: Cargo check
-        run: cargo check --workspace --all-targets --all-features --locked
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
-      - name: Cargo test
-        run: cargo test --workspace --all-features --locked
+      - name: Test workspace
+        run: cargo test --workspace --locked
 
-      - name: Build primary binary
-        run: cargo build -p anki-workflow-mcp --locked
+      - name: Build binary for parity
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo build --locked --features oracle -p anki-workflow-mcp
 
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Upload Rust binary
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
         with:
-          python-version: "3.13"
+          name: anki-workflow-mcp-linux-debug
+          path: target/debug/anki-workflow-mcp
+          retention-days: 1
+          if-no-files-found: error
+
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
           enable-cache: true
 
-      - name: Install Python dev dependencies
+      - name: Install dependencies
         run: uv sync --extra dev --frozen
 
-      - name: Run differential parity tests
-        run: uv run --frozen pytest tests/differential/ -v --tb=short
+      - name: Lint (ruff)
+        run: uv run --frozen ruff check src tests scripts
+
+      - name: Typecheck (mypy)
+        run: uv run --frozen mypy src
+
+      - name: Unit & integration tests (non-differential)
+        run: uv run --frozen pytest --ignore=tests/differential
+
+  parity:
+    name: Parity (ubuntu-latest)
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Rust binary
+        uses: actions/download-artifact@v4
+        with:
+          name: anki-workflow-mcp-linux-debug
+          path: target/debug
+
+      - name: Mark binary executable
+        run: chmod +x target/debug/anki-workflow-mcp
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --extra dev --frozen
+
+      - name: Differential parity tests
+        env:
+          ANKI_RUST_BIN: ${{ github.workspace }}/target/debug/anki-workflow-mcp
+        run: uv run --frozen pytest tests/differential/
 
   test:
     name: Test (${{ matrix.os }})
-    # Protected checks cannot succeed while either Rust platform fails.
-    needs: rust
+    # Protected required check aggregate (fail-closed)
+    needs: [rust, python, parity]
     if: ${{ always() }}
     strategy:
       fail-fast: false
@@ -70,34 +130,15 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-
     steps:
-      - name: Require Rust and parity on both platforms
+      - name: Require rust, python, and parity success
         env:
           RUST_RESULT: ${{ needs.rust.result }}
+          PYTHON_RESULT: ${{ needs.python.result }}
+          PARITY_RESULT: ${{ needs.parity.result }}
         shell: bash
-        run: test "$RUST_RESULT" = success
-
-      # Fixed actions; matrix values are static, not user-controlled input.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
-        with:
-          python-version: "3.13"
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --extra dev --frozen
-
-      - name: Lint & format check
         run: |
-          uv run --frozen ruff check src/ tests/
-          uv run --frozen ruff format --check src/ tests/
+          test "$RUST_RESULT" = "success"
+          test "$PYTHON_RESULT" = "success"
+          test "$PARITY_RESULT" = "success"
 
-      - name: Run tests
-        run: uv run --frozen pytest -v --tb=short --cov=anki_mcp --cov-report=term-missing --cov-fail-under=70
-
-      - name: Type check
-        run: uv run --frozen --with mypy mypy src/ --ignore-missing-imports --no-error-summary

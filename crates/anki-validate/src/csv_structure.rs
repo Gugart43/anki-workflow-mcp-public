@@ -47,7 +47,7 @@ fn mask_comments(value: &str) -> (String, usize) {
 pub fn check_bom(raw_bytes: &[u8]) -> Vec<Diagnostic> {
     if raw_bytes.starts_with(b"\xef\xbb\xbf") {
         vec![Diagnostic::new(
-            "FMT.BOM",
+            anki_domain::DiagnosticCode::from_static("FMT.BOM"),
             Severity::Critical,
             "anki-formatting-guide",
             "UTF-8 BOM detected at start of file",
@@ -123,7 +123,7 @@ fn check_entities_and_brackets(
     if stripped.contains('<') || stripped.contains('>') {
         diags.push(
             Diagnostic::new(
-                "FMT.ENTITY_MISSING",
+                anki_domain::DiagnosticCode::from_static("FMT.ENTITY_MISSING"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!("Row {row}, field '{field}': raw '<' or '>' — use &lt; / &gt;"),
@@ -138,7 +138,7 @@ fn check_entities_and_brackets(
     if no_entities.contains('&') {
         diags.push(
             Diagnostic::new(
-                "FMT.AMP_RAW",
+                anki_domain::DiagnosticCode::from_static("FMT.AMP_RAW"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!("Row {row}, field '{field}': raw '&' not part of a valid HTML entity"),
@@ -180,7 +180,7 @@ fn check_classes(value: &str, row: usize, field: &str) -> Vec<Diagnostic> {
                 }
                 diags.push(
                     Diagnostic::new(
-                        "FMT.CLASS_UNKNOWN",
+                        anki_domain::DiagnosticCode::from_static("FMT.CLASS_UNKNOWN"),
                         Severity::Warn,
                         "anki-formatting-guide",
                         format!(
@@ -207,7 +207,7 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
         if tag_raw.starts_with('!') || tag_raw.starts_with('?') {
             diags.push(
                 Diagnostic::new(
-                    "FMT.TAG_FORBIDDEN",
+                    anki_domain::DiagnosticCode::from_static("FMT.TAG_FORBIDDEN"),
                     Severity::Critical,
                     "anki-formatting-guide",
                     format!(
@@ -229,7 +229,7 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
         } else if is_images_only_tag(&tag_name) && !allows_figure_tags {
             diags.push(
                 Diagnostic::new(
-                    "FMT.TAG_FORBIDDEN",
+                    anki_domain::DiagnosticCode::from_static("FMT.TAG_FORBIDDEN"),
                     Severity::Critical,
                     "anki-formatting-guide",
                     format!(
@@ -242,7 +242,7 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
         } else {
             diags.push(
                 Diagnostic::new(
-                    "FMT.TAG_FORBIDDEN",
+                    anki_domain::DiagnosticCode::from_static("FMT.TAG_FORBIDDEN"),
                     Severity::Critical,
                     "anki-formatting-guide",
                     format!(
@@ -264,7 +264,7 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
                 } else {
                     diags.push(
                         Diagnostic::new(
-                            "FMT.TAG_UNCLOSED",
+                            anki_domain::DiagnosticCode::from_static("FMT.TAG_UNCLOSED"),
                             Severity::Warn,
                             "anki-formatting-guide",
                             format!(
@@ -285,7 +285,7 @@ fn check_tags(value: &str, row: usize, field: &str, is_images_field: bool) -> Ve
     for unclosed in tag_stack {
         diags.push(
             Diagnostic::new(
-                "FMT.TAG_UNCLOSED",
+                anki_domain::DiagnosticCode::from_static("FMT.TAG_UNCLOSED"),
                 Severity::Warn,
                 "anki-formatting-guide",
                 format!("Row {row}, field '{field}': unclosed tag <{unclosed}>"),
@@ -307,7 +307,7 @@ fn check_mathjax(value: &str, row: usize, field: &str) -> Vec<Diagnostic> {
     if inline_opens != inline_closes {
         diags.push(
             Diagnostic::new(
-                "MATH.UNBALANCED",
+                anki_domain::DiagnosticCode::from_static("MATH.UNBALANCED"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!(
@@ -324,7 +324,7 @@ fn check_mathjax(value: &str, row: usize, field: &str) -> Vec<Diagnostic> {
     if block_opens != block_closes {
         diags.push(
             Diagnostic::new(
-                "MATH.UNBALANCED",
+                anki_domain::DiagnosticCode::from_static("MATH.UNBALANCED"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!(
@@ -339,7 +339,7 @@ fn check_mathjax(value: &str, row: usize, field: &str) -> Vec<Diagnostic> {
     if has_dollar_math(value) {
         diags.push(
             Diagnostic::new(
-                "MATH.DOLLAR",
+                anki_domain::DiagnosticCode::from_static("MATH.DOLLAR"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!(r"Row {row}, field '{field}': raw '$' — use \( \) for math"),
@@ -371,12 +371,12 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
     if enforce_header && header_line.trim() != canonical {
         diags.push(
             Diagnostic::new(
-                "FMT.HEADER_MISMATCH",
+                anki_domain::DiagnosticCode::from_static("FMT.HEADER_MISMATCH"),
                 Severity::Critical,
                 "anki-formatting-guide",
                 format!("Expected: '{canonical}' | Got: '{}'", header_line.trim()),
             )
-            .with_row(1)
+            .with_row(1usize)
             .with_suggestion(canonical),
         );
     }
@@ -391,7 +391,7 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
         if !row.structural_ok {
             diags.push(
                 Diagnostic::new(
-                    "FMT.COLUMN_COUNT",
+                    anki_domain::DiagnosticCode::from_static("FMT.COLUMN_COUNT"),
                     Severity::Critical,
                     "anki-formatting-guide",
                     format!(
@@ -403,7 +403,7 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
             );
             diags.push(
                 Diagnostic::new(
-                    "FMT.FIELD_SHIFTED",
+                    anki_domain::DiagnosticCode::from_static("FMT.FIELD_SHIFTED"),
                     Severity::Critical,
                     "anki-formatting-guide",
                     format!(
@@ -423,7 +423,7 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
             if value.contains('\n') || value.contains('\r') {
                 diags.push(
                     Diagnostic::new(
-                        "FMT.RAW_NEWLINE",
+                        anki_domain::DiagnosticCode::from_static("FMT.RAW_NEWLINE"),
                         Severity::Critical,
                         "anki-formatting-guide",
                         format!("Row {lineno}, field '{field_name}': raw newline character"),
@@ -438,7 +438,7 @@ pub fn check_csv(csv_text: &str, note_type: NoteType, enforce_header: bool) -> V
             for _ in 0..n_comments {
                 diags.push(
                     Diagnostic::new(
-                        "FMT.TAG_FORBIDDEN",
+                        anki_domain::DiagnosticCode::from_static("FMT.TAG_FORBIDDEN"),
                         Severity::Critical,
                         "anki-formatting-guide",
                         format!(

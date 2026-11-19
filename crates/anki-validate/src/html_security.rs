@@ -1,114 +1,505 @@
-//! Fail-closed active-content boundary for Rust-first outputs.
-//! Legacy formatting helpers remain unchanged for differential compatibility.
-use regex::Regex;
+//! Fail-closed HTML5 active-content boundary for Rust-first outputs.
+//! Uses `ammonia` (`html5ever`) with a strict AnkiMBR + F2 semantic allowlist.
+
+use ammonia::{Builder, UrlRelative};
+use std::borrow::Cow;
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-static TAG: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)<([a-zA-Z][a-zA-Z0-9]*)((?:"[^"]*"|'[^']*'|[^<>"'])*)>"#)
-        .expect("HTML boundary regex")
-});
+const ALLOWED_TAGS: &[&str] = &[
+    "abbr",
+    "b",
+    "blockquote",
+    "br",
+    "caption",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "dd",
+    "del",
+    "details",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "hr",
+    "i",
+    "img",
+    "ins",
+    "kbd",
+    "li",
+    "mark",
+    "ol",
+    "p",
+    "pre",
+    "s",
+    "section",
+    "small",
+    "span",
+    "strong",
+    "sub",
+    "summary",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "u",
+    "ul",
+    "wbr",
+];
 
-fn safe_style(value: &str) -> bool {
+const CLEAN_CONTENT_TAGS: &[&str] = &[
+    "applet", "audio", "base", "button", "canvas", "embed", "form", "iframe", "input", "link",
+    "math", "meta", "noscript", "object", "script", "select", "style", "svg", "template",
+    "textarea", "title", "video", "xmp",
+];
+
+thread_local! {
+    static ATTR_REJECTED: Cell<bool> = const { Cell::new(false) };
+}
+
+pub(crate) fn safe_style(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    !["url", "expression", "import", "behavior", "binding"]
-        .iter()
-        .any(|s| lower.contains(s))
+    ![
+        "url",
+        "expression",
+        "import",
+        "behavior",
+        "binding",
+        "javascript",
+        "vbscript",
+    ]
+    .iter()
+    .any(|s| lower.contains(s))
         && value.chars().all(|c| {
             c.is_ascii_alphanumeric() || c.is_ascii_whitespace() || ":;#%.,()-".contains(c)
         })
 }
 
-fn safe_attribute(tag: &str, name: &str, value: &str) -> bool {
-    match name {
-        "class" | "title" | "alt" => !value.contains(['<', '>']),
-        "style" => safe_style(value),
-        "colspan" | "rowspan" => !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit()),
-        "scope" => matches!(value, "row" | "col" | "rowgroup" | "colgroup"),
-        // No remote, data, protocol-relative or traversal sources, encoded or literal.
-        "src" if tag == "img" => {
-            !value.is_empty()
-                && !value.contains("..")
-                && value
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"_-.".contains(&c))
-        }
-        _ => false,
-    }
+pub(crate) fn safe_img_src(value: &str) -> bool {
+    !value.is_empty()
+        && !value.contains("..")
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-.".contains(&c))
 }
 
-pub(crate) fn has_unsafe_html(value: &str) -> bool {
-    for caps in TAG.captures_iter(value) {
-        let tag = caps[1].to_ascii_lowercase();
-        if matches!(
-            tag.as_str(),
-            "script"
-                | "iframe"
-                | "object"
-                | "embed"
-                | "svg"
-                | "math"
-                | "link"
-                | "meta"
-                | "base"
-                | "form"
-        ) {
-            return true;
+static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
+    let mut builder = Builder::default();
+
+    builder.tags(ALLOWED_TAGS.iter().copied().collect());
+    builder.clean_content_tags(CLEAN_CONTENT_TAGS.iter().copied().collect());
+    builder.generic_attributes(HashSet::from(["title", "style"]));
+    builder.tag_attributes(HashMap::from([
+        ("img", HashSet::from(["src", "alt"])),
+        ("th", HashSet::from(["colspan", "rowspan", "scope"])),
+        ("td", HashSet::from(["colspan", "rowspan", "scope"])),
+    ]));
+    builder.allowed_classes(HashMap::from([
+        (
+            "figure",
+            HashSet::from(["anki-figure", "anki-table-figure", "media"]),
+        ),
+        (
+            "span",
+            HashSet::from([
+                "destaque",
+                "cloze",
+                "cloze-inactive",
+                "ambr-badge",
+                "ambr-pill",
+                "ambr-tag",
+                "ambr-muted",
+                "ambr-accent",
+                "alerta",
+                "crit",
+                "crit-i",
+                "dose",
+                "faixa",
+                "fig-context",
+                "fig-title",
+                "hints",
+                "lab",
+                "nl",
+                "nl-i",
+                "nl-sub",
+                "pearl",
+                "rot",
+                "sigla",
+                "style-notas",
+                "style-ref",
+                "tbl",
+                "termo",
+                "uni",
+            ]),
+        ),
+        (
+            "details",
+            HashSet::from([
+                "hint-details",
+                "anki-details",
+                "ambr-details",
+                "anki-detail",
+            ]),
+        ),
+        ("summary", HashSet::from(["hint-summary", "ambr-summary"])),
+        (
+            "div",
+            HashSet::from([
+                "ambr-card",
+                "ambr-section",
+                "ambr-callout",
+                "ambr-note",
+                "ambr-table-wrap",
+                "anki-note",
+                "anki-callout",
+                "alerta",
+            ]),
+        ),
+        ("table", HashSet::from(["anki-table", "ambr-table", "tbl"])),
+        (
+            "p",
+            HashSet::from(["ambr-note", "ambr-muted", "destaque", "alerta"]),
+        ),
+        (
+            "blockquote",
+            HashSet::from([
+                "ambr-callout",
+                "anki-callout",
+                "anki-callout--trap",
+                "anki-callout--pearl",
+                "anki-callout--diff",
+                "alerta",
+            ]),
+        ),
+        (
+            "section",
+            HashSet::from([
+                "anki-note-section",
+                "anki-kv-section",
+                "anki-list",
+                "anki-steps",
+                "anki-flow",
+                "ambr-section",
+            ]),
+        ),
+        ("footer", HashSet::from(["anki-sources"])),
+        ("dl", HashSet::from(["anki-kv"])),
+        ("ol", HashSet::from(["anki-steps"])),
+        ("ul", HashSet::from(["anki-list", "anki-flow"])),
+    ]));
+
+    builder.url_schemes(HashSet::new());
+    builder.url_relative(UrlRelative::PassThrough);
+    builder.link_rel(None);
+    builder.strip_comments(true);
+
+    builder.attribute_filter(|tag, attr, val| {
+        let allowed = match (tag, attr) {
+            (_, "style") => safe_style(val),
+            (_, "title") | ("img", "alt") => !val.contains(['<', '>']),
+            ("img", "src") => safe_img_src(val),
+            ("th" | "td", "colspan" | "rowspan") => {
+                !val.is_empty() && val.bytes().all(|c| c.is_ascii_digit())
+            }
+            ("th" | "td", "scope") => matches!(val, "row" | "col" | "rowgroup" | "colgroup"),
+            _ => true,
+        };
+        if allowed {
+            Some(Cow::Borrowed(val))
+        } else {
+            ATTR_REJECTED.with(|flag| flag.set(true));
+            None
         }
-        let attrs = caps[2].as_bytes();
-        let mut i = 0;
-        while i < attrs.len() {
-            while i < attrs.len() && attrs[i].is_ascii_whitespace() {
-                i += 1;
+    });
+
+    builder
+});
+
+fn is_benign_html5_diff(orig: &str, clean: &str) -> bool {
+    let mut o = orig.as_bytes();
+    let mut c = clean.as_bytes();
+    let mut in_tag = false;
+
+    while !o.is_empty() && !c.is_empty() {
+        if !in_tag {
+            // HTML5 parser auto-inserts <tbody> in tables
+            if c.starts_with(b"<tbody>") && !o.starts_with(b"<tbody>") {
+                c = &c[b"<tbody>".len()..];
+                continue;
             }
-            if i == attrs.len() || (attrs[i] == b'/' && i + 1 == attrs.len()) {
-                break;
+            if c.starts_with(b"</tbody>") && !o.starts_with(b"</tbody>") {
+                c = &c[b"</tbody>".len()..];
+                continue;
             }
-            let start = i;
-            while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || b"_-".contains(&attrs[i]))
+
+            // Entity decodings in text nodes
+            if o.starts_with(b"&#124;") && c.starts_with(b"|") {
+                o = &o[6..];
+                c = &c[1..];
+                continue;
+            }
+            if o.starts_with(b"&quot;") && c.starts_with(b"\"") {
+                o = &o[6..];
+                c = &c[1..];
+                continue;
+            }
+            if o.starts_with(b"&apos;") && c.starts_with(b"'") {
+                o = &o[6..];
+                c = &c[1..];
+                continue;
+            }
+            if o.starts_with(b"&#39;") && c.starts_with(b"'") {
+                o = &o[5..];
+                c = &c[1..];
+                continue;
+            }
+            if o.starts_with(b"&#x27;") && c.starts_with(b"'") {
+                o = &o[6..];
+                c = &c[1..];
+                continue;
+            }
+            if o.starts_with(b"&le;") && c.starts_with("≤".as_bytes()) {
+                o = &o[4..];
+                c = &c["≤".len()..];
+                continue;
+            }
+            if o.starts_with(b"&ge;") && c.starts_with("≥".as_bytes()) {
+                o = &o[4..];
+                c = &c["≥".len()..];
+                continue;
+            }
+            if o.starts_with(b"&nbsp;") && c.starts_with("\u{00A0}".as_bytes()) {
+                o = &o[6..];
+                c = &c["\u{00A0}".len()..];
+                continue;
+            }
+            if o.starts_with("\u{00A0}".as_bytes()) && c.starts_with(b"&nbsp;") {
+                o = &o["\u{00A0}".len()..];
+                c = &c[6..];
+                continue;
+            }
+
+            // Clinical inequalities / raw entity serialization in text
+            if o[0] == b'>' && c.starts_with(b"&gt;") {
+                o = &o[1..];
+                c = &c[4..];
+                continue;
+            }
+            if o[0] == b'&' && c.starts_with(b"&amp;") {
+                o = &o[1..];
+                c = &c[5..];
+                continue;
+            }
+            if o[0] == b'<'
+                && c.starts_with(b"&lt;")
+                && !o
+                    .get(1)
+                    .is_some_and(|b| b.is_ascii_alphabetic() || matches!(b, b'/' | b'!' | b'?'))
             {
-                i += 1;
+                o = &o[1..];
+                c = &c[4..];
+                continue;
             }
-            if i == start {
-                return true;
+        } else {
+            // Self-closing void tag normalization (<br/> -> <br>, <hr /> -> <hr>)
+            if o.starts_with(b"/>") && c.starts_with(b">") {
+                o = &o[2..];
+                c = &c[1..];
+                in_tag = false;
+                continue;
             }
-            let name = caps[2][start..i].to_ascii_lowercase();
-            while i < attrs.len() && attrs[i].is_ascii_whitespace() {
-                i += 1;
+            let ws_len = o.iter().take_while(|&&b| b == b' ' || b == b'\t').count();
+            if ws_len > 0 && o[ws_len..].starts_with(b"/>") && c.starts_with(b">") {
+                o = &o[ws_len + 2..];
+                c = &c[1..];
+                in_tag = false;
+                continue;
             }
-            if i == attrs.len() || attrs[i] != b'=' {
-                return true;
+
+            // Normalization of attribute quote styles: 'value' -> "value"
+            if o.starts_with(b"'") && c.starts_with(b"\"") {
+                o = &o[1..];
+                c = &c[1..];
+                continue;
             }
-            i += 1;
-            while i < attrs.len() && attrs[i].is_ascii_whitespace() {
-                i += 1;
+        }
+
+        if o[0] == c[0] {
+            if o[0] == b'<' {
+                in_tag = true;
+            } else if o[0] == b'>' {
+                in_tag = false;
             }
-            if i == attrs.len() {
-                return true;
-            }
-            let val;
-            if matches!(attrs[i], b'\'' | b'"') {
-                let quote = attrs[i];
-                i += 1;
-                let start = i;
-                while i < attrs.len() && attrs[i] != quote {
-                    i += 1;
-                }
-                if i == attrs.len() {
-                    return true;
-                }
-                val = &caps[2][start..i];
-                i += 1;
-            } else {
-                let start = i;
-                while i < attrs.len() && !attrs[i].is_ascii_whitespace() {
-                    i += 1;
-                }
-                val = &caps[2][start..i];
-            }
-            if !safe_attribute(&tag, &name, val) {
-                return true;
-            }
+            o = &o[1..];
+            c = &c[1..];
+            continue;
+        }
+
+        return false;
+    }
+
+    // Trailing benign insertions (e.g. </tbody> before EOF)
+    while !in_tag && c.starts_with(b"</tbody>") {
+        c = &c[b"</tbody>".len()..];
+    }
+
+    o.is_empty() && c.is_empty()
+}
+
+pub fn has_unsafe_html(value: &str) -> bool {
+    if !value.contains('<') {
+        return false;
+    }
+    ATTR_REJECTED.with(|flag| flag.set(false));
+    let cleaned = SANITIZER.clean(value).to_string();
+    if ATTR_REJECTED.with(|flag| flag.get()) {
+        return true;
+    }
+    cleaned != value && !is_benign_html5_diff(value, &cleaned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_benign_semantic_tags_and_classes() {
+        let safe_cases = [
+            "<section class=\"anki-note-section\"><p><b>Título</b></p><p>Texto</p></section>",
+            "<dl class=\"anki-kv\"><dt>Chave</dt><dd>Valor</dd></dl>",
+            "<section class=\"anki-kv-section\"><p><b>Par</b></p><dl class=\"anki-kv\"><dt>K</dt><dd>V</dd></dl></section>",
+            "<blockquote class=\"anki-callout anki-callout--trap\"><p><b>Cuidado:</b> Perigo</p></blockquote>",
+            "<blockquote class=\"anki-callout anki-callout--pearl\"><p><b>Dica:</b> Peróla</p></blockquote>",
+            "<blockquote class=\"anki-callout anki-callout--diff\"><p><b>Diferencial:</b> Comparação</p></blockquote>",
+            "<section class=\"anki-list\"><ul><li>Item 1</li><li>Item 2</li></ul></section>",
+            "<section class=\"anki-steps\"><ol><li>Passo 1</li><li>Passo 2</li></ol></section>",
+            "<section class=\"anki-flow\"><ul><li>Etapa A</li></ul></section>",
+            "<details class=\"anki-detail\"><summary><b>Expandir</b></summary><p>Detalhe</p></details>",
+            "<details class=\"hint-details\"><summary class=\"hint-summary\">Dica</summary>Texto</details>",
+            "<footer class=\"anki-sources\"><small><b>Fonte:</b> <cite>Harrison 21ed</cite></small></footer>",
+            "<table class=\"anki-table\"><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>",
+            "<figure class=\"anki-figure\"><img src=\"fig1.png\" alt=\"Foto\"><figcaption>Legenda</figcaption></figure>",
+            "<figure class=\"anki-figure anki-table-figure\"><img src=\"tbl1.png\" alt=\"Tabela\"></figure>",
+            "<span class=\"destaque\" style=\"color: red\">Destaque seguro</span>",
+        ];
+
+        for case in safe_cases {
+            assert!(!has_unsafe_html(case), "should be accepted as safe: {case}");
         }
     }
-    false
+
+    #[test]
+    fn accepts_clinical_inequalities_and_table_normalization() {
+        let benign_cases = [
+            "<p>K+ > 5.5 mEq/L</p>",
+            "<p>pH < 7.35</p>",
+            "<p>Troponina <= 0.04</p>",
+            "<p>Glicemia >= 126</p>",
+            "<p>Item A & Item B</p>",
+            "<p>Texto com &#124; pipe escapado</p>",
+            "<p>Linha 1<br/>Linha 2</p>",
+            "<p>Linha 1<br />Linha 2</p>",
+            "<table><tr><th>Sem Tbody</th></tr><tr><td>Valor</td></tr></table>",
+        ];
+
+        for case in benign_cases {
+            assert!(
+                !has_unsafe_html(case),
+                "benign normalization should not be marked unsafe: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_active_content_and_script_injection() {
+        let unsafe_cases = [
+            "<script>alert(1)</script>",
+            "<script src=\"evil.js\"></script>",
+            "<b onclick=\"alert(1)\">Texto</b>",
+            "<b oNcLiCk='alert(1)'>Texto</b>",
+            "<img src=\"x\" onerror=\"alert(1)\">",
+            "<svg><circle onload=\"alert(1)\"/></svg>",
+            "<iframe src=\"javascript:alert(1)\"></iframe>",
+            "<a href=\"javascript:alert(1)\">Link</a>",
+            "<object data=\"evil.swf\"></object>",
+            "<embed src=\"evil.swf\">",
+            "<form action=\"evil.com\"><input type=\"text\"></form>",
+        ];
+
+        for case in unsafe_cases {
+            assert!(has_unsafe_html(case), "must be rejected as unsafe: {case}");
+        }
+    }
+
+    #[test]
+    fn rejects_dangerous_css_and_escapes() {
+        let unsafe_styles = [
+            "<span style=\"background:url(https://evil.com/x)\">Texto</span>",
+            "<span style=\"background:u&#114;l(x)\">Texto</span>",
+            "<span style=\"background:u\\72l(x)\">Texto</span>",
+            "<span style=\"expression(alert(1))\">Texto</span>",
+            "<span style=\"behavior:url(evil.htc)\">Texto</span>",
+            "<span style=\"binding:url(evil.xml)\">Texto</span>",
+            "<span style=\"/*comment*/color:red\">Texto</span>",
+            "<span style=\"@import 'evil.css'\">Texto</span>",
+        ];
+
+        for case in unsafe_styles {
+            assert!(
+                has_unsafe_html(case),
+                "dangerous CSS must be rejected: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_media_traversal_and_remote_urls() {
+        let unsafe_media = [
+            "<img src=\"../secret.png\" alt=\"x\">",
+            "<img src=\"sub/folder.png\" alt=\"x\">",
+            "<img src=\"https://remote.com/pic.png\" alt=\"x\">",
+            "<img src=\"data:image/png;base64,AAAA\" alt=\"x\">",
+            "<img src=\"javascript:alert(1)\" alt=\"x\">",
+        ];
+
+        for case in unsafe_media {
+            assert!(
+                has_unsafe_html(case),
+                "media traversal or remote URL must be rejected: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_classes_and_attributes() {
+        let unknown_cases = [
+            "<div class=\"unregistered-class\">Texto</div>",
+            "<span class=\"destaque evil-class\">Texto</span>",
+            "<p id=\"custom-id\">Texto</p>",
+            "<p data-bind=\"x\">Texto</p>",
+        ];
+
+        for case in unknown_cases {
+            assert!(
+                has_unsafe_html(case),
+                "unknown classes and attributes must be rejected: {case}"
+            );
+        }
+    }
 }

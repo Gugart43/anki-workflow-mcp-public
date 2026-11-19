@@ -14,45 +14,29 @@ Agradecemos o interesse em contribuir com o `anki-workflow-mcp`. Para manter a i
 
 ---
 
-## Gates Obrigatórios Pré-Commit
+## Setup local
 
-Todas as verificações abaixo são executadas na Integração Contínua (CI) em ambientes Linux e Windows e devem passar sem falhas localmente:
-
-### 1. Gates de Rust
+Pré-requisitos: [Rust](https://rustup.rs/) (lido automaticamente de `rust-toolchain.toml`, canal `1.99.1`; MSRV real mínimo 1.89 por `uuid 1.29.2`, `rmcp 3.10.0` e let-chains), [uv](https://docs.astral.sh/uv/) e [just](https://github.com/casey/just).
 
 ```bash
-# 1. Formatação de código
-cargo fmt --all -- --check
-
-# 2. Análise estática com Clippy (sem warnings tolerados)
-cargo clippy --all-targets --all-features -- -D warnings
-
-# 3. Testes unitários e de integração em todo o workspace
-cargo test --workspace --all-features
-
-# 4. Build de release com lockfile congelado
-cargo build --release --locked -p anki-workflow-mcp
+just setup
 ```
 
-### 2. Gates de Python e Paridade Diferencial
+## Validação pré-PR
+
+Antes de abrir um PR, execute o gate unificado (espelha exatamente `.github/workflows/ci.yml`):
 
 ```bash
-# 1. Sincronização do ambiente isolado
-uv sync --extra dev --frozen
-
-# 2. Verificação de estilo e linting
-uv run ruff check src tests
-uv run ruff format --check src tests
-
-# 3. Testes unitários com cobertura mínima exigida de 70%
-uv run pytest --cov=anki_mcp --cov-fail-under=70
-
-# 4. Checagem estática de tipos
-uv run --with mypy mypy src --ignore-missing-imports
-
-# 5. Suíte diferencial de equivalência matemática/comportamental
-uv run pytest tests/differential/ -v
+just check
 ```
+
+Receitas individuais disponíveis no `justfile`:
+- `just rust-check` — `cargo fmt --check`, `clippy -D warnings` e `cargo test --workspace --locked`
+- `just py-check` — `ruff check`, `mypy src` e `pytest --ignore=tests/differential`
+- `just parity` — compila o binário Rust (`--locked --features oracle`) e executa `tests/differential/`
+- `just contracts-check` — detecta drift nos contratos legados sem falsos positivos em `server_meta.json`
+- `just build-release` — gera o binário otimizado `target/release/anki-workflow-mcp`
+- `just fmt` — formata tanto Rust quanto Python
 
 ---
 

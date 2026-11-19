@@ -138,7 +138,7 @@ fn check_reference_field(ref_raw: &str, row: usize, diagnostics: &mut Vec<Diagno
     if trimmed.is_empty() {
         diagnostics.push(
             Diagnostic::new(
-                "QUALITY.MISSING_REFERENCE",
+                anki_domain::DiagnosticCode::from_static("QUALITY.MISSING_REFERENCE"),
                 Severity::Warn,
                 OWNER_SKILL,
                 "Campo Referências vazio; adicione fonte verificável (autor/sociedade, ano e seção/página ou DOI/URL).",
@@ -149,7 +149,7 @@ fn check_reference_field(ref_raw: &str, row: usize, diagnostics: &mut Vec<Diagno
     } else if is_generic_reference(trimmed) {
         diagnostics.push(
             Diagnostic::new(
-                "QUALITY.GENERIC_REFERENCE",
+                anki_domain::DiagnosticCode::from_static("QUALITY.GENERIC_REFERENCE"),
                 Severity::Warn,
                 OWNER_SKILL,
                 format!(
@@ -210,7 +210,7 @@ fn check_binary_choice_field(
     if has_binary_choice_bracket(&visible) {
         diagnostics.push(
             Diagnostic::new(
-                "QUALITY.BINARY_CHOICE_CLOZE",
+                anki_domain::DiagnosticCode::from_static("QUALITY.BINARY_CHOICE_CLOZE"),
                 Severity::Critical,
                 OWNER_SKILL,
                 "Escolha binária fechada entre colchetes ([A / B]) compromete recuperação ativa; reescreva como evocação aberta.",
@@ -235,7 +235,7 @@ fn check_allinone_mc_leak(
     if has_cmd || has_vec {
         diagnostics.push(
             Diagnostic::new(
-                "QUALITY.ALLINONE_MC_LEAK",
+                anki_domain::DiagnosticCode::from_static("QUALITY.ALLINONE_MC_LEAK"),
                 Severity::Critical,
                 OWNER_SKILL,
                 "Padrão de múltipla escolha importada sem conversão para recuperação ativa (comando MC ou vetor binário de gabarito).",
@@ -287,7 +287,7 @@ fn check_missing_media_tag(tags: &str, row: usize, diagnostics: &mut Vec<Diagnos
     if has_tag {
         diagnostics.push(
             Diagnostic::new(
-                "QUALITY.MISSING_MEDIA_TAG",
+                anki_domain::DiagnosticCode::from_static("QUALITY.MISSING_MEDIA_TAG"),
                 Severity::Critical,
                 OWNER_SKILL,
                 "Etiqueta 'mídia-ausente' presente; anexe a imagem clínica correspondente ou remova a dependência visual.",
@@ -316,7 +316,7 @@ fn check_img_alts(html: &str, row: usize, field: &str, diagnostics: &mut Vec<Dia
         if is_bad_alt {
             diagnostics.push(
                 Diagnostic::new(
-                    "QUALITY.GENERIC_IMG_ALT",
+                    anki_domain::DiagnosticCode::from_static("QUALITY.GENERIC_IMG_ALT"),
                     Severity::Warn,
                     OWNER_SKILL,
                     "Tag <img> com atributo alt ausente, vazio ou genérico; forneça descrição clínica específica em alt=\"...\".",
@@ -369,6 +369,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
 
     let mut qa_rows: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (row, line) in iter_data_lines(qa_csv) {
+        let row = row.get();
         let cols = split_row(line, 7).cols;
         let prompt = cols.first().map_or("", String::as_str);
         let answer = cols.get(1).map_or("", String::as_str);
@@ -397,7 +398,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
         {
             diagnostics.push(
                 Diagnostic::new(
-                    "QUALITY.DUAL_TARGET_QA",
+                    anki_domain::DiagnosticCode::from_static("QUALITY.DUAL_TARGET_QA"),
                     Severity::Warn,
                     OWNER_SKILL,
                     "Enunciado sugere duas cobranças distintas na mesma pergunta; separe em cartões atômicos.",
@@ -414,7 +415,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
         {
             diagnostics.push(
                 Diagnostic::new(
-                    "QUALITY.ANSWER_EXPLANATION_MIX",
+                    anki_domain::DiagnosticCode::from_static("QUALITY.ANSWER_EXPLANATION_MIX"),
                     Severity::Warn,
                     OWNER_SKILL,
                     "Resposta extensa ou multifrase com Notas Adicionais vazio; mantenha apenas o alvo direto em Resposta e mova a explicação para Notas Adicionais.",
@@ -443,6 +444,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
 
     let mut cloze_rows: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (row, line) in iter_data_lines(cloze_csv) {
+        let row = row.get();
         let cols = split_row(line, 6).cols;
         let sentence = cols.first().map_or("", String::as_str);
         let notes = cols.get(1).map_or("", String::as_str);
@@ -465,7 +467,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
         if ul_has_at_least_three_li(sentence) && count_cloze_indices(sentence).len() == 1 {
             diagnostics.push(
                 Diagnostic::new(
-                    "QUALITY.LIST_SCAFFOLD_WARN",
+                    anki_domain::DiagnosticCode::from_static("QUALITY.LIST_SCAFFOLD_WARN"),
                     Severity::Warn,
                     OWNER_SKILL,
                     "Sentença contém lista <ul> com >= 3 itens e apenas 1 índice Cloze; avalie decomposição ou múltiplos cartões independentes.",
@@ -517,7 +519,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
         if let Some(first_target) = prompts.get(&key.0) {
             if first_target != &key.1 {
                 diagnostics.push(Diagnostic::new(
-                    "QUALITY.AMBIGUOUS_PROMPT", Severity::Warn, OWNER_SKILL,
+                    anki_domain::DiagnosticCode::from_static("QUALITY.AMBIGUOUS_PROMPT"), Severity::Warn, OWNER_SKILL,
                     "Same normalized visible prompt has different targets; review context, alternatives and potential interference.",
                 ).with_row(card.source_row));
             }
@@ -526,7 +528,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
         }
         if let Some((kind, row, index)) = seen.get(&key) {
             diagnostics.push(Diagnostic::new(
-                "QUALITY.DUPLICATE_RETRIEVAL", Severity::Critical, OWNER_SKILL,
+                anki_domain::DiagnosticCode::from_static("QUALITY.DUPLICATE_RETRIEVAL"), Severity::Critical, OWNER_SKILL,
                 format!("Repeated visible prompt and target: {} row {} index {:?}; first at {kind} row {row} index {index:?}. Review duplicates instead of creating repeated obligations.",card.note_type,card.source_row,card.cloze_index),
             ).with_row(card.source_row));
         } else {
@@ -556,7 +558,7 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
                     if union > 0 && inter * 10 >= union * 7 {
                         diagnostics.push(
                             Diagnostic::new(
-                                "QUALITY.NEAR_DUPLICATE_WARN",
+                                anki_domain::DiagnosticCode::from_static("QUALITY.NEAR_DUPLICATE_WARN"),
                                 Severity::Warn,
                                 OWNER_SKILL,
                                 format!(

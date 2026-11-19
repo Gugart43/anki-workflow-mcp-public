@@ -104,12 +104,13 @@ impl<'a> TableHtmlParser<'a> {
 
     fn emit(
         &mut self,
-        code: &str,
+        code: &'static str,
         severity: Severity,
         message: String,
         suggestion: Option<String>,
     ) {
-        let mut diag = Diagnostic::new(code, severity, OWNER_SKILL, message).with_field(self.field);
+        let mut diag = Diagnostic::from_static_code(code, severity, OWNER_SKILL, message)
+            .with_field(self.field);
         if let Some(r) = self.row {
             diag = diag.with_row(r);
         }
@@ -582,7 +583,7 @@ pub fn check_tables_field(
     let has_sep = lines.iter().any(|line| is_separator_row(line));
     if has_sep || pipe_lines_count >= 2 {
         let mut diag = Diagnostic::new(
-            "TBL.MARKDOWN_PIPE",
+            anki_domain::DiagnosticCode::from_static("TBL.MARKDOWN_PIPE"),
             Severity::Critical,
             OWNER_SKILL,
             "Markdown table or raw pipe syntax detected in field (collides with CSV delimiter)",

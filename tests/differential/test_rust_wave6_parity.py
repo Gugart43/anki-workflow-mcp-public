@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
-from functools import cache
 from pathlib import Path
 
 import pytest
@@ -17,20 +14,12 @@ from anki_mcp.models.draft import CardDraft, MediaFigure
 
 ROOT = Path(__file__).resolve().parents[2]
 
+try:
+    from tests.differential.conftest import resolve_rust_binary
+except ImportError:
+    from conftest import resolve_rust_binary
 
-@cache
-def _binary() -> Path:
-    if os.environ.get("ANKI_SKIP_RUST_ORACLE") == "1" or shutil.which("cargo") is None:
-        pytest.skip("Rust oracle unavailable")
-    subprocess.run(["cargo", "build", "-p", "anki-workflow-mcp"], cwd=ROOT, check=True)
-    path = (
-        ROOT
-        / "target"
-        / "debug"
-        / ("anki-workflow-mcp.exe" if os.name == "nt" else "anki-workflow-mcp")
-    )
-    assert path.is_file()
-    return path
+_binary = resolve_rust_binary
 
 
 def _oracle(op: str, **kwargs: object) -> dict:

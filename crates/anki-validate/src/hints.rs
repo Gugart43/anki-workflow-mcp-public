@@ -141,7 +141,13 @@ fn make_hint_diag(
     severity: Severity,
     suggestion: Option<String>,
 ) -> Diagnostic {
-    let mut diag = Diagnostic::new(code, severity, "anki-cloze-hints", message).with_field(field);
+    let mut diag = Diagnostic::new(
+        anki_domain::DiagnosticCode::from_static(code),
+        severity,
+        "anki-cloze-hints",
+        message,
+    )
+    .with_field(field);
     if let Some(r) = row {
         diag = diag.with_row(r);
     }

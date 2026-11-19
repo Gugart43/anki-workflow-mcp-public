@@ -1,6 +1,6 @@
 //! Pipe-delimited CSV row splitter, Cloze span parser, and batch card counter.
 
-use anki_domain::{BatchCount, CompatibilityProfile, MAX_BATCH};
+use anki_domain::{BatchCount, CompatibilityProfile, CsvRowNumber, MAX_BATCH, NoteType};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -32,6 +32,12 @@ pub fn split_row(line: &str, expected: usize) -> SplitRow {
         expected,
         structural_ok,
     }
+}
+
+/// Split a row matching the expected columns for the given `NoteType`.
+#[must_use]
+pub fn split_row_for(line: &str, note_type: NoteType) -> SplitRow {
+    split_row(line, note_type.expected_columns())
 }
 
 /// Split text into lines using Python `str.splitlines()` semantics.
@@ -86,13 +92,17 @@ pub fn py_is_blank(s: &str) -> bool {
 
 /// Return `(1-based line number, raw line)` for every non-blank line after the header.
 #[must_use]
-pub fn iter_data_lines(csv_text: &str) -> Vec<(usize, &str)> {
+pub fn iter_data_lines(csv_text: &str) -> Vec<(CsvRowNumber, &str)> {
     py_splitlines(csv_text)
         .into_iter()
         .enumerate()
         .skip(1)
         .filter(|(_, line)| !py_is_blank(line))
-        .map(|(idx, line)| (idx + 1, line))
+        .map(|(idx, line)| {
+            let row = CsvRowNumber::new(idx + 1)
+                .expect("skip(1) guarantees 1-based data row number >= 2");
+            (row, line)
+        })
         .collect()
 }
 
@@ -353,5 +363,57 @@ mod tests {
         assert!(!over.within_limit);
         assert_eq!(over.excess, 1);
         assert_eq!(over.ext_batch_suggested.as_deref(), Some("B03-EXT"));
+    }
+
+    #[test]
+    fn split_row_for_uses_expected_columns() {
+        let qa_valid = "a|b|c|d|e|f|g";
+        let r1 = split_row_for(qa_valid, NoteType::Qa);
+        assert!(r1.structural_ok);
+        assert_eq!(r1.expected, 7);
+        assert_eq!(r1.count(), 7);
+
+        let qa_invalid = "a|b|c|d|e|f";
+        let r2 = split_row_for(qa_invalid, NoteType::Qa);
+        assert!(!r2.structural_ok);
+        assert_eq!(r2.expected, 7);
+        assert_eq!(r2.count(), 6);
+
+        let cl_valid = "a|b|c|d|e|f";
+        let r3 = split_row_for(cl_valid, NoteType::Cloze);
+        assert!(r3.structural_ok);
+        assert_eq!(r3.expected, 6);
+        assert_eq!(r3.count(), 6);
+
+        let cl_long_valid = "a|b|c|d|e|f";
+        let r4 = split_row_for(cl_long_valid, NoteType::ClozeLong);
+        assert!(r4.structural_ok);
+        assert_eq!(r4.expected, 6);
+        assert_eq!(r4.count(), 6);
+    }
+
+    #[test]
+    fn iter_data_lines_returns_typed_csv_row_numbers() {
+        let csv = "Enunciado|Resposta|Campo|Notas|Imagens|Refs|Tags\n\
+                   Q1|R1|Cardio||||\n\
+                   \n\
+                   Q3|R3|Neuro||||\n";
+
+        let lines = iter_data_lines(csv);
+        assert_eq!(lines.len(), 2);
+
+        // First data line is line 2 (header is line 1)
+        let (row1, line1) = &lines[0];
+        assert_eq!(row1.get(), 2);
+        assert_eq!(*row1, 2);
+        assert_eq!(row1, &2);
+        assert_eq!(*line1, "Q1|R1|Cardio||||");
+
+        // Second data line is line 4 (line 3 is blank)
+        let (row2, line2) = &lines[1];
+        assert_eq!(row2.get(), 4);
+        assert_eq!(*row2, 4);
+        assert_eq!(row2, &4);
+        assert_eq!(*line2, "Q3|R3|Neuro||||");
     }
 }

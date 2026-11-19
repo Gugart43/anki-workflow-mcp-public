@@ -7,302 +7,65 @@
 //! - `NOTE.LENGTH_WARN` — notes field outside recommended length (WARN, configurable)
 //! - `NOTE.STYLE_WARN` — list items not using `• <b>…</b>` pattern (WARN)
 
-use anki_domain::{Diagnostic, Severity};
-use regex::Regex;
 use std::sync::LazyLock;
 
+use anki_domain::{Diagnostic, Severity};
+use regex::Regex;
+
+// Re-exports preservam 100% das assinaturas públicas da Fase 1.
+pub use crate::domain_profile::{DomainProfile, DomainProfileError};
+pub use crate::html_text::{
+    html_to_visible_text, normalize_for_exact_match, parse_html_text, strip_table_blocks,
+    visible_char_count,
+};
+pub use crate::note_metrics::{
+    NotesStructureMetrics, check_cloze_target_restatement, compute_notes_metrics,
+    is_exact_answer_restatement,
+};
+
 pub const DEFAULT_MAX_LENGTH: usize = 1200;
+
+const OWNER: &str = "anki-notes-enricher";
+const DEFAULT_FIELD: &str = "Notas Adicionais";
 
 static METADATA_HEADERS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?im)^\s*(ID\s*:|Âncora\s*:|Anchor\s*:|Cross-ref\s*:|Cross\s+ref\s*:|Relevância\s*:|Relevancia\s*:)",
     )
-    .expect("valid metadata headers regex")
+    .expect("valid METADATA_HEADERS_RE")
 });
 
-static RESTATEMENT_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(?:a\s+resposta\s+(?:correta\s+)?(?:é|e)|resposta(?:\s+correta)?)\s*:?\s*")
-        .expect("valid restatement prefix regex")
+static HAS_TABLE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)<table\b").expect("valid HAS_TABLE_RE"));
+
+static BULLET_LINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:^|<br\s*/?>|\n|<div[^>]*>|<p[^>]*>)\s*(?:[•▪▸►]|[-*]\s)\s*")
+        .expect("valid BULLET_LINE_RE")
 });
 
-static LEADING_BULLET_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[•\-–—*\s]+").expect("valid leading bullet regex"));
+static LI_BLOCK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<li\b[^>]*>(.*?)</li>").expect("valid LI_BLOCK_RE"));
 
-static TRAILING_PUNCT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[.!?…:;\s]+$").expect("valid trailing punct regex"));
-
-static SEGMENT_SPLIT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\n.!?]+").expect("valid segment split regex"));
-
-static TRAILING_SEGMENT_PUNCT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[,:;()\s]+$").expect("valid trailing segment punct regex"));
-
-static TABLE_BLOCK_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?is)<table.*?>.*?</table>").expect("valid table block regex"));
-
-static WHITESPACE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("valid whitespace regex"));
-
-static EXAM_BOILERPLATE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    let known_labels = "USP|UNIFESP|UNICAMP|UNESP|IAMSPE|FCMSCSP|SUS-SP|ENARE|PSU-MG|PSU|AMRIGS|AMP|SURCE|SES-DF|SES-PE|SES-RJ|UFRJ|UERJ|UFMG|UFPR|UFRGS|UFBA|UFC|UFPE|HCFMUSP|HC-FMUSP|HC-UFMG|INCA|INTO|FHEMIG|SCMSP|FAMERP|FAMEMA|REVALIDA|ABN|TE-ABN|AMB|CFM|CBR|SBC|SBN";
-    let pattern = format!(
-        r"(?i)^(?:(?:aten[çc][ãa]o|dica|nota|obs\.?|observa[çc][ãa]o|prova|alerta)\s*[:\-–—]\s*)?(?:(?:j[áa]\s+)?(?:foi\s+)?(?:caiu|cobrad[oa]|pedid[oa]|perguntad[oa]|apareceu|costuma\s+cair|cai(?:\s+(?:muito|sempre|frequentemente))?)\s+(?:em|na|no|nas|nos)\s+(?:provas?|concursos?|resid[êe]ncia(?:\s+m[ée]dica)?|quest[õo]es|exames?|bancas?)|(?:tema|assunto|conceito|t[óo]pico|detalhe|quest[ãa]o)\s+(?:cl[áa]ssic[oa]|frequente|recorrente|quente|(?:muito\s+)?cobrad[oa])\s+(?:em|na|no|nas|nos|de)\s+(?:provas?|concursos?|resid[êe]ncia(?:\s+m[ée]dica)?|bancas?|exames?)|(?:muito\s+)?(?:cobrad[oa]|frequente|recorrente|cl[áa]ssic[oa])\s+(?:em|na|no|nas|nos)\s+(?:provas?|concursos?|resid[êe]ncia(?:\s+m[ée]dica)?|bancas?)|prova(?:\s+(?:d[eao]\s+)?(?:resid[êe]ncia(?:\s+m[ée]dica)?|(?-i:(?:{known_labels}))))?(?:\s+(?:de|em))?\s+(?:19|20)\d{{2}})(?:\s+d[eao]\s+resid[êe]ncia(?:\s+m[ée]dica)?|\s+(?:(?:d[aeo]|n[ao]|em)\s+)?(?-i:(?:{known_labels}))\b|\s+(?:(?:d[aeo]|n[ao]|em)\s+)?(?:19|20)\d{{2}}(?:\s*[/\\-]\s*(?:19|20)?\d{{2,4}})?){{0,3}}$"
-    );
-    Regex::new(&pattern).expect("valid exam boilerplate regex")
+static BOLD_OPEN_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)^(?:<(?:b|strong)\b|<span\b[^>]*\bclass\s*=\s*["'][^"']*\brot\b[^"']*["'])"#)
+        .expect("valid BOLD_OPEN_RE")
 });
 
-fn decode_entity_token(token: &str) -> Option<char> {
-    if let Some(rest) = token.strip_prefix('#') {
-        if let Some(hex) = rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
-            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-        } else {
-            rest.parse::<u32>().ok().and_then(char::from_u32)
-        }
-    } else {
-        match token {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some(' '),
-            "ge" => Some('≥'),
-            "le" => Some('≤'),
-            "bull" => Some('•'),
-            "deg" => Some('°'),
-            "plusmn" => Some('±'),
-            "times" => Some('×'),
-            "divide" => Some('÷'),
-            "micro" => Some('µ'),
-            _ => None,
-        }
-    }
-}
-
-fn is_block_break_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "br" | "hr"
-            | "p"
-            | "div"
-            | "li"
-            | "tr"
-            | "blockquote"
-            | "h1"
-            | "h2"
-            | "h3"
-            | "h4"
-            | "h5"
-            | "h6"
-            | "ul"
-            | "ol"
-    )
-}
-
-/// Parse HTML text preserving block line breaks and decoding entities (`checks/information.py::parse_html_text`).
-#[must_use]
-pub fn parse_html_text(raw: &str) -> (String, usize, usize) {
-    if raw.is_empty() {
-        return (String::new(), 0, 0);
-    }
-    let mut chunks = String::with_capacity(raw.len());
-    let mut li_count = 0usize;
-    let mut br_count = 0usize;
-    let mut skip_depth = 0usize;
-
-    let bytes = raw.as_bytes();
-    let n = bytes.len();
-    let mut i = 0;
-
-    while i < n {
-        if bytes[i] == b'<' {
-            if raw[i..].starts_with("<!--")
-                && let Some(end_comment) = raw[i + 4..].find("-->")
-            {
-                i += 4 + end_comment + 3;
-                continue;
-            }
-            if let Some(close_pos) = bytes[i + 1..].iter().position(|&b| b == b'>') {
-                let tag_content = raw[i + 1..i + 1 + close_pos].trim();
-                let is_close = tag_content.starts_with('/');
-                let bare_tag = if is_close {
-                    tag_content[1..].trim_start()
-                } else {
-                    tag_content
-                };
-                let tag_name: String = bare_tag
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .flat_map(char::to_lowercase)
-                    .collect();
-
-                if tag_name == "script" || tag_name == "style" {
-                    if is_close {
-                        skip_depth = skip_depth.saturating_sub(1);
-                    } else {
-                        skip_depth += 1;
-                    }
-                    i += 2 + close_pos;
-                    continue;
-                }
-
-                if skip_depth == 0 {
-                    if tag_name == "li" {
-                        if !is_close {
-                            li_count += 1;
-                        }
-                        chunks.push('\n');
-                    } else if tag_name == "br" {
-                        br_count += 1;
-                        chunks.push('\n');
-                    } else if is_block_break_tag(&tag_name) {
-                        chunks.push('\n');
-                    } else if tag_name == "td" || tag_name == "th" {
-                        chunks.push(' ');
-                    }
-                }
-
-                i += 2 + close_pos;
-                continue;
-            }
-        }
-
-        if skip_depth == 0 {
-            if bytes[i] == b'&'
-                && let Some(semi_pos) = bytes[i + 1..].iter().position(|&b| b == b';')
-            {
-                let entity = &raw[i + 1..i + 1 + semi_pos];
-                if let Some(decoded) = decode_entity_token(entity) {
-                    chunks.push(if decoded == '\u{00a0}' { ' ' } else { decoded });
-                    i += 2 + semi_pos;
-                    continue;
-                }
-            }
-            let ch = raw[i..].chars().next().expect("valid utf8");
-            chunks.push(if ch == '\u{00a0}' { ' ' } else { ch });
-            i += ch.len_utf8();
-        } else {
-            let ch = raw[i..].chars().next().expect("valid utf8");
-            i += ch.len_utf8();
-        }
-    }
-
-    let lines: Vec<String> = chunks
-        .lines()
-        .map(|ln| {
-            let collapsed = WHITESPACE_RE.replace_all(ln, " ");
-            collapsed.trim().to_owned()
-        })
-        .filter(|ln| !ln.is_empty())
-        .collect();
-
-    (lines.join("\n"), li_count, br_count)
-}
-
-/// Return collapsed single-line visible text with HTML tags removed and entities decoded.
-#[must_use]
-pub fn html_to_visible_text(raw: &str) -> String {
-    let (text, _, _) = parse_html_text(raw);
-    let collapsed = WHITESPACE_RE.replace_all(&text, " ");
-    collapsed.trim().to_owned()
-}
-
-/// Count visible characters (`checks/information.py::visible_char_count`).
-#[must_use]
-pub fn visible_char_count(raw: &str) -> usize {
-    html_to_visible_text(raw).chars().count()
-}
-
-/// Normalize text for exact repetition comparison.
-#[must_use]
-pub fn normalize_for_exact_match(raw: &str) -> String {
-    let vis = html_to_visible_text(raw).to_lowercase();
-    let trimmed_leading = LEADING_BULLET_RE.replace(&vis, "");
-    let trimmed_trailing = TRAILING_PUNCT_RE.replace(&trimmed_leading, "");
-    trimmed_trailing.trim().to_owned()
-}
-
-/// Return True iff notes only repeats or restates answer without adding pedagogical explanation.
-#[must_use]
-pub fn is_exact_answer_restatement(notes: &str, answer: &str) -> bool {
-    let norm_answer = normalize_for_exact_match(answer);
-    let norm_notes = normalize_for_exact_match(notes);
-    if norm_answer.is_empty() || norm_notes.is_empty() {
-        return false;
-    }
-    if norm_notes == norm_answer {
-        return true;
-    }
-    if let Some(m) = RESTATEMENT_PREFIX_RE.find(&norm_notes)
-        && m.start() == 0
-    {
-        let stripped = norm_notes[m.end()..].trim();
-        return !stripped.is_empty() && stripped == norm_answer && stripped != norm_notes;
-    }
-    false
-}
-
-/// Return True iff non-empty notes contain ONLY exam-appearance mentions without pedagogical explanation.
 #[must_use]
 pub fn is_exam_only_note(notes: &str) -> bool {
-    let (text, _, _) = parse_html_text(notes);
-    if text.is_empty() {
-        return false;
-    }
-    let raw_segments: Vec<&str> = SEGMENT_SPLIT_RE
-        .split(&text)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect();
-    if raw_segments.is_empty() {
-        return false;
-    }
-    let mut non_empty_segments = 0;
-    for seg in raw_segments {
-        let cleaned1 = LEADING_BULLET_RE.replace(seg, "");
-        let cleaned = TRAILING_SEGMENT_PUNCT_RE.replace(cleaned1.trim(), "");
-        let cleaned = cleaned.trim();
-        if cleaned.is_empty() {
-            continue;
-        }
-        non_empty_segments += 1;
-        if !EXAM_BOILERPLATE_RE.is_match(cleaned) {
-            return false;
-        }
-    }
-    non_empty_segments > 0
+    is_exam_only_note_with_profile(notes, DomainProfile::default_profile())
 }
 
-fn has_style_item_violation(text: &str) -> bool {
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
-    let mut i = 0;
-    while i < n {
-        let ch = chars[i];
-        if ch == '•' || ch == '-' || ch == '*' {
-            let ws_count = chars[i + 1..]
-                .iter()
-                .take_while(|c| c.is_whitespace())
-                .count();
-            if ws_count > 0 {
-                let after_ws: String = chars[i + 1 + ws_count..].iter().collect();
-                if !after_ws.starts_with("<b>") {
-                    return true;
-                }
-            }
-        }
-        i += 1;
-    }
-    false
+#[must_use]
+pub fn is_exam_only_note_with_profile(notes: &str, profile: &DomainProfile) -> bool {
+    profile.is_exam_only_note(notes)
 }
 
-/// Check the `Notas Adicionais` field matching `checks/notes.py::check_notes`.
 #[must_use]
 pub fn check_notes(notes: &str, answer: &str, row: Option<usize>) -> Vec<Diagnostic> {
-    check_notes_ext(notes, answer, row, "Notas Adicionais", DEFAULT_MAX_LENGTH)
+    check_notes_ext(notes, answer, row, DEFAULT_FIELD, DEFAULT_MAX_LENGTH)
 }
 
-/// Check the notes field with custom field name and max visible character limit.
 #[must_use]
 pub fn check_notes_ext(
     notes: &str,
@@ -311,101 +74,158 @@ pub fn check_notes_ext(
     field: &str,
     max_length: usize,
 ) -> Vec<Diagnostic> {
-    let mut diags = Vec::new();
+    check_notes_with_profile(
+        notes,
+        answer,
+        row,
+        field,
+        Some(max_length),
+        DomainProfile::default_profile(),
+    )
+}
 
-    // ── NOTE.METADATA ─────────────────────────────────────────────────────────
-    for m in METADATA_HEADERS_RE.find_iter(notes) {
-        let mut d = Diagnostic::new(
-            "NOTE.METADATA",
-            Severity::Critical,
-            "anki-notes-enricher",
-            format!("Forbidden metadata header found: '{}'", m.as_str().trim()),
-        )
-        .with_field(field)
-        .with_suggestion("Remove metadata — Notes field is for pedagogical explanations only");
-        if let Some(r) = row {
-            d = d.with_row(r);
-        }
-        diags.push(d);
+#[must_use]
+pub fn check_notes_with_profile(
+    notes: &str,
+    answer: &str,
+    row: Option<usize>,
+    field: &str,
+    max_length: Option<usize>,
+    profile: &DomainProfile,
+) -> Vec<Diagnostic> {
+    if notes.trim().is_empty() {
+        return Vec::new();
     }
 
-    // ── NOTE.DUP_ANSWER_WARN ─────────────────────────────────────────────────
-    if !answer.is_empty() && !notes.is_empty() && is_exact_answer_restatement(notes, answer) {
-        let mut d = Diagnostic::new(
+    let mut diags = Vec::new();
+    // Preserva quebras de linha (\n) para que (?im)^ capture cabeçalhos após <br>/<p>/<li>.
+    let (block_text, _, _) = parse_html_text(notes);
+
+    // 1. NOTE.METADATA (respeita InfoPolicy::forbid_metadata_headers)
+    if profile.info_policy.forbid_metadata_headers {
+        for m in METADATA_HEADERS_RE.find_iter(&block_text) {
+            diags.push(build_diagnostic(
+                "NOTE.METADATA",
+                Severity::Critical,
+                format!("Forbidden metadata header found: '{}'", m.as_str().trim()),
+                row,
+                field,
+                Some("Remove metadata — Notes field is for pedagogical explanations only"),
+            ));
+        }
+    }
+
+    // 2. NOTE.DUP_ANSWER_WARN (respeita InfoPolicy::forbid_verbatim_answer_restatement)
+    if profile.info_policy.forbid_verbatim_answer_restatement
+        && !answer.trim().is_empty()
+        && is_exact_answer_restatement(notes, answer)
+    {
+        diags.push(build_diagnostic(
             "NOTE.DUP_ANSWER_WARN",
             Severity::Warn,
-            "anki-notes-enricher",
             "Notes repeat the answer verbatim — deepen the explanation instead",
-        )
-        .with_field(field)
-        .with_suggestion(
-            "Explain *why* the answer is correct or add related nuance from the source",
-        );
-        if let Some(r) = row {
-            d = d.with_row(r);
-        }
-        diags.push(d);
+            row,
+            field,
+            Some("Explain *why* the answer is correct or add related nuance from the source"),
+        ));
     }
 
-    // ── NOTE.EXAM_ONLY_WARN ──────────────────────────────────────────────────
-    if !notes.is_empty() && is_exam_only_note(notes) {
-        let mut d = Diagnostic::new(
+    // 3. NOTE.EXAM_ONLY_WARN (respeita InfoPolicy::forbid_exam_only_mentions)
+    if profile.info_policy.forbid_exam_only_mentions
+        && is_exam_only_note_with_profile(notes, profile)
+    {
+        diags.push(build_diagnostic(
             "NOTE.EXAM_ONLY_WARN",
             Severity::Warn,
-            "anki-notes-enricher",
             "Notes contain only an exam mention without pedagogical explanation",
-        )
-        .with_field(field)
-        .with_suggestion(
-            "Menção isolada a prova não explica a unidade; acrescente explicação útil da fonte ou deixe Notas Adicionais vazio.",
-        );
-        if let Some(r) = row {
-            d = d.with_row(r);
-        }
-        diags.push(d);
+            row,
+            field,
+            Some("Menção isolada a prova não explica a unidade; acrescente explicação útil da fonte ou deixe Notas Adicionais vazio."),
+        ));
     }
 
-    // ── NOTE.LENGTH_WARN ─────────────────────────────────────────────────────
-    let has_table = notes.to_lowercase().contains("<table");
+    // 4. NOTE.LENGTH_WARN
+    let base_max = max_length.unwrap_or(profile.default_max_note_chars);
+    let has_table = HAS_TABLE_RE.is_match(notes);
     let effective_max = if has_table {
-        max_length.max(2500)
+        base_max.max(profile.table_max_note_chars)
     } else {
-        max_length
+        base_max
     };
     let visible_length = visible_char_count(notes);
     if visible_length > effective_max {
-        let mut d = Diagnostic::new(
+        diags.push(build_diagnostic(
             "NOTE.LENGTH_WARN",
             Severity::Warn,
-            "anki-notes-enricher",
             format!(
                 "Notes field is {visible_length} visible chars (recommended ≤ {effective_max}; advisory only)"
             ),
-        )
-        .with_field(field);
-        if let Some(r) = row {
-            d = d.with_row(r);
-        }
-        diags.push(d);
+            row,
+            field,
+            None,
+        ));
     }
 
-    // ── NOTE.STYLE_WARN ──────────────────────────────────────────────────────
-    let notes_outside_tables = TABLE_BLOCK_RE.replace_all(notes, "");
-    if has_style_item_violation(&notes_outside_tables) {
-        let mut d = Diagnostic::new(
+    // 5. NOTE.STYLE_WARN
+    if has_unbolded_list_item(notes) {
+        let pref = &profile.info_policy.preferred_list_format;
+        diags.push(build_diagnostic(
             "NOTE.STYLE_WARN",
             Severity::Warn,
-            "anki-notes-enricher",
-            "List items found without <b>…</b> wrapper — preferred: '• <b>Tópico:</b> …'",
-        )
-        .with_field(field);
-        if let Some(r) = row {
-            d = d.with_row(r);
-        }
-        diags.push(d);
+            format!("List items found without <b>…</b> wrapper — preferred: '{pref}'"),
+            row,
+            field,
+            None,
+        ));
     }
 
     diags
+}
+
+fn has_unbolded_list_item(notes: &str) -> bool {
+    let non_table = strip_table_blocks(notes);
+
+    for m in BULLET_LINE_RE.find_iter(&non_table) {
+        let rest = non_table[m.end()..].trim_start();
+        if !rest.is_empty() && !BOLD_OPEN_RE.is_match(rest) {
+            return true;
+        }
+    }
+
+    for cap in LI_BLOCK_RE.captures_iter(&non_table) {
+        let inner = cap[1]
+            .trim_start()
+            .trim_start_matches(['•', '▪', '▸', '►', '-', '*', ' ']);
+        if !inner.is_empty() && !BOLD_OPEN_RE.is_match(inner) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn build_diagnostic(
+    code: &'static str,
+    severity: Severity,
+    message: impl Into<String>,
+    row: Option<usize>,
+    field: &str,
+    suggestion: Option<&str>,
+) -> Diagnostic {
+    let mut diag = Diagnostic::new(
+        anki_domain::DiagnosticCode::from_static(code),
+        severity,
+        OWNER,
+        message,
+    )
+    .with_field(field);
+    if let Some(r) = row {
+        diag = diag.with_row(r);
+    }
+    if let Some(s) = suggestion {
+        diag = diag.with_suggestion(s);
+    }
+    diag
 }
 
 #[cfg(test)]
@@ -586,5 +406,59 @@ mod tests {
                 .iter()
                 .any(|d| d.code == "NOTE.DUP_ANSWER_WARN" && d.severity == Severity::Warn)
         );
+    }
+
+    #[test]
+    fn test_policy_flags_honored() {
+        let custom_json = r#"{
+            "id": "lenient",
+            "name": "Lenient Profile",
+            "description": "desc",
+            "language": "pt",
+            "default_max_note_chars": 1200,
+            "table_max_note_chars": 2500,
+            "exam_boilerplate": { "enabled": true, "known_labels": ["USP"], "phrase_patterns": ["(?:USP)"] },
+            "info_policy": {
+                "source_fidelity": "ok",
+                "notes_purpose": "ok",
+                "forbid_metadata_headers": false,
+                "forbid_verbatim_answer_restatement": false,
+                "forbid_exam_only_mentions": false,
+                "preferred_list_format": "• <b>Tópico:</b> ..."
+            }
+        }"#;
+
+        let profile = DomainProfile::from_json_str(custom_json).expect("valid profile");
+
+        // Metadata headers ignored under lenient policy
+        let d_meta =
+            check_notes_with_profile("ID: CARD-1", "Ans", None, DEFAULT_FIELD, None, &profile);
+        assert!(!d_meta.iter().any(|d| d.code == "NOTE.METADATA"));
+
+        // Verbatim restatement ignored under lenient policy
+        let d_dup = check_notes_with_profile("Ans", "Ans", None, DEFAULT_FIELD, None, &profile);
+        assert!(!d_dup.iter().any(|d| d.code == "NOTE.DUP_ANSWER_WARN"));
+
+        // Exam only ignored under lenient policy
+        let d_exam = check_notes_with_profile("USP", "Ans", None, DEFAULT_FIELD, None, &profile);
+        assert!(!d_exam.iter().any(|d| d.code == "NOTE.EXAM_ONLY_WARN"));
+    }
+
+    #[test]
+    fn test_general_profile_ignores_exam_mentions() {
+        let general = DomainProfile::general();
+        assert!(!is_exam_only_note_with_profile(
+            "Cobrado na prova da USP 2023.",
+            general
+        ));
+        let diags = check_notes_with_profile(
+            "Cobrado na prova da USP 2023.",
+            "Ans",
+            None,
+            DEFAULT_FIELD,
+            None,
+            general,
+        );
+        assert!(!diags.iter().any(|d| d.code == "NOTE.EXAM_ONLY_WARN"));
     }
 }

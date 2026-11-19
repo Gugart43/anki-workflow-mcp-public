@@ -3,13 +3,8 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
-from functools import cache
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 QA_HEADER = (
@@ -17,20 +12,12 @@ QA_HEADER = (
 )
 CL_HEADER = "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas"
 
+try:
+    from tests.differential.conftest import resolve_rust_binary
+except ImportError:
+    from conftest import resolve_rust_binary
 
-@cache
-def _binary() -> Path:
-    if os.getenv("ANKI_SKIP_RUST_ORACLE") == "1" or shutil.which("cargo") is None:
-        pytest.skip("Rust oracle unavailable")
-    subprocess.run(["cargo", "build", "-p", "anki-workflow-mcp"], cwd=ROOT, check=True)
-    binary = (
-        ROOT
-        / "target"
-        / "debug"
-        / ("anki-workflow-mcp.exe" if os.name == "nt" else "anki-workflow-mcp")
-    )
-    assert binary.is_file()
-    return binary
+_binary = resolve_rust_binary
 
 
 def _review(qa_csv: str, cloze_csv: str) -> dict:

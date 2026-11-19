@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::cloze::check_cloze;
 use crate::csv_structure::check_csv;
 use crate::hints::check_hints;
-use crate::notes::{check_notes, is_exact_answer_restatement, visible_char_count};
+use crate::note_metrics::check_cloze_target_restatement;
+use crate::notes::{check_notes, visible_char_count};
 use crate::qa::{check_qa, extract_candidate_items};
 
 fn visible_context_for_index(sentence: &str, index: usize) -> String {
@@ -80,6 +81,7 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
     diagnostics.extend(check_csv(cloze_csv, NoteType::Cloze, true));
 
     for (row, line) in iter_data_lines(qa_csv) {
+        let row = row.get();
         let fields = split_row(line, 7).cols;
         let prompt = fields.first().map_or("", String::as_str);
         let answer = fields.get(1).map_or("", String::as_str);
@@ -108,6 +110,7 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
     let qa_cards = cards.len();
 
     for (row, line) in iter_data_lines(cloze_csv) {
+        let row = row.get();
         let fields = split_row(line, 6).cols;
         let sentence = fields.first().map_or("", String::as_str);
         let notes = fields.get(1).map_or("", String::as_str);
@@ -137,7 +140,7 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
                     let mut diagnostics = issues;
                     diagnostics.push(
                         Diagnostic::new(
-                            "INFO.CLOZE_NO_INDEX",
+                            anki_domain::DiagnosticCode::from_static("INFO.CLOZE_NO_INDEX"),
                             anki_domain::Severity::Warn,
                             "anki-cloze-creator",
                             "No valid Cloze index found; review the sentence before export",
@@ -173,22 +176,14 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
                 })
                 .cloned()
                 .collect();
-            if is_exact_answer_restatement(notes, &retrieved_target) {
-                card_issues.push(
-                    Diagnostic::new(
-                        "NOTE.DUP_ANSWER_WARN",
-                        anki_domain::Severity::Warn,
-                        "anki-notes-enricher",
-                        format!("Notes repeat the c{index} target without explanation"),
-                    )
-                    .with_row(row)
-                    .with_field("Notas Adicionais"),
-                );
+            if let Some(diag) = check_cloze_target_restatement(notes, &retrieved_target, index, row)
+            {
+                card_issues.push(diag);
             }
             if candidate_item_count >= 3 {
                 card_issues.push(
                     Diagnostic::new(
-                        "INFO.CLOZE_HIDDEN_LIST",
+                        anki_domain::DiagnosticCode::from_static("INFO.CLOZE_HIDDEN_LIST"),
                         anki_domain::Severity::Warn,
                         "anki-cloze-creator",
                         format!("c{index} hides {candidate_item_count} candidate items; review semantic independence"),

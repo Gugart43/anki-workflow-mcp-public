@@ -1,9 +1,9 @@
 # ADR-004: Receipt SHA-256 v1 vs `ValidationAttestation` v2
 
-- **Status:** Aceito (Arquitetura-alvo / Parcialmente implementado)
-- **Status de Implementação:** Parcialmente implementado. `compute_receipt_v1` está 100% implementado em Rust com equivalência exata a `src/anki_mcp/core/receipt.py`. A persistência relacional de `ValidationAttestation` em SQLite permanece como arquitetura-alvo, operando atualmente via snapshots em memória (`snapshot_hash`) no gate `quality_v1`, mantendo `export_authorized=false` e `clinical_correctness_certified=false` em todos os veredictos.
+- **Status:** Proposed / Target Architecture (Not Implemented)
+- **Status de Implementação:** Apenas `compute_receipt_v1` e `snapshot_hash` existem; `ValidationAttestation` v2 e HMAC via secret manager não foram implementados (em revisão para simplificação na Onda 3).
 - **Data:** 2026-11-14
-- **Relacionado:** ADR-001, ADR-003, Seções 3.3 e 4.1 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
+- **Relacionado:** [ADR-001](ADR-001-rust-migration.md), ADR-003
 
 ## Contexto
 
