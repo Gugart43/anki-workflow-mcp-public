@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use anki_domain::{Diagnostic, Severity};
+pub use anki_domain::CsvRowNumber;
+use anki_domain::{Diagnostic, DiagnosticCode, Severity};
 use regex::Regex;
 
 static FIG_RE: LazyLock<Regex> =
@@ -22,7 +23,7 @@ static FIGCAP: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)<figcaption[^>]*>(.*?)</figcaption>").expect("valid FIGCAP")
 });
 static NS_VALID: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9]*_[a-z0-9_.]+$").expect("valid NS_VALID"));
+    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9-]*_[a-z0-9_.-]+$").expect("valid NS_VALID"));
 static NOISE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)(?:ISBN|Copyright|©|\bReceived\s*:|ISSN|\bDOI\s*:|\bCatalog\s+No\b|Todos\s+os\s+direitos\s+reservados)",
@@ -44,21 +45,26 @@ static HTML_TAG_RE: LazyLock<Regex> =
 
 const OWNER_SKILL: &str = "anki-image-injector";
 
+pub const CODE_IMG_BARE_IMG: DiagnosticCode = DiagnosticCode::from_static("IMG.BARE_IMG");
+pub const CODE_IMG_INLINE_STYLE: DiagnosticCode = DiagnosticCode::from_static("IMG.INLINE_STYLE");
+pub const CODE_IMG_CAP_OVER: DiagnosticCode = DiagnosticCode::from_static("IMG.CAP_OVER");
+pub const CODE_IMG_STRUCTURE: DiagnosticCode = DiagnosticCode::from_static("IMG.STRUCTURE");
+pub const CODE_IMG_ALT_MISSING: DiagnosticCode = DiagnosticCode::from_static("IMG.ALT_MISSING");
+pub const CODE_IMG_NAMESPACE: DiagnosticCode = DiagnosticCode::from_static("IMG.NAMESPACE");
+pub const CODE_IMG_PHANTOM: DiagnosticCode = DiagnosticCode::from_static("IMG.PHANTOM");
+pub const CODE_IMG_DUP_IN_CARD: DiagnosticCode = DiagnosticCode::from_static("IMG.DUP_IN_CARD");
+pub const CODE_IMG_CAPTION: DiagnosticCode = DiagnosticCode::from_static("IMG.CAPTION");
+pub const CODE_IMG_CAPTION_WEAK: DiagnosticCode = DiagnosticCode::from_static("IMG.CAPTION_WEAK");
+
 fn make_diag(
-    code: &'static str,
+    code: DiagnosticCode,
     severity: Severity,
     message: impl Into<String>,
     row: Option<usize>,
     field: &str,
     suggestion: Option<&str>,
 ) -> Diagnostic {
-    let mut d = Diagnostic::new(
-        anki_domain::DiagnosticCode::from_static(code),
-        severity,
-        OWNER_SKILL,
-        message,
-    )
-    .with_field(field);
+    let mut d = Diagnostic::new(code, severity, OWNER_SKILL, message).with_field(field);
     if let Some(r) = row {
         d = d.with_row(r);
     }
@@ -66,6 +72,17 @@ fn make_diag(
         d = d.with_suggestion(s);
     }
     d
+}
+
+/// Validate the `Imagens Relacionadas` HTML field with a typed `CsvRowNumber`.
+#[must_use]
+pub fn check_images_field_row(
+    html: &str,
+    catalog_filenames: Option<&HashSet<String>>,
+    row: Option<CsvRowNumber>,
+    field: &str,
+) -> Vec<Diagnostic> {
+    check_images_field(html, catalog_filenames, row.map(usize::from), field)
 }
 
 /// Validate the `Imagens Relacionadas` HTML field.
@@ -87,7 +104,7 @@ pub fn check_images_field(
     for bare_m in IMG_TAG.find_iter(&outside_figures) {
         let bare_str = bare_m.as_str();
         diags.push(make_diag(
-            "IMG.BARE_IMG",
+            CODE_IMG_BARE_IMG.clone(),
             Severity::Critical,
             format!("Bare <img> tag found outside <figure>: '{bare_str}'"),
             row,
@@ -98,7 +115,7 @@ pub fn check_images_field(
         ));
         if STYLE_ATTR_RE.is_match(bare_str) {
             diags.push(make_diag(
-                "IMG.INLINE_STYLE",
+                CODE_IMG_INLINE_STYLE.clone(),
                 Severity::Warn,
                 format!("Bare <img> tag contains inline style '{bare_str}'"),
                 row,
@@ -112,7 +129,7 @@ pub fn check_images_field(
     let img_src_count = IMG_SRC.captures_iter(html).count();
     if img_src_count > 3 {
         diags.push(make_diag(
-            "IMG.CAP_OVER",
+            CODE_IMG_CAP_OVER.clone(),
             Severity::Critical,
             format!("Card has {img_src_count} images (maximum 3)"),
             row,
@@ -137,7 +154,7 @@ pub fn check_images_field(
         for style_m in INLINE_STYLE_ATTR.captures_iter(full_block) {
             let tag = style_m.get(1).map_or("", |m| m.as_str());
             diags.push(make_diag(
-                "IMG.INLINE_STYLE",
+                CODE_IMG_INLINE_STYLE.clone(),
                 Severity::Warn,
                 format!("Figure #{idx}: inline style in <{tag}> tag breaks theme CSS"),
                 row,
@@ -151,7 +168,7 @@ pub fn check_images_field(
         // ── IMG.STRUCTURE (img) ──────────────────────────────────────────────
         let Some(img_cap) = img_m else {
             diags.push(make_diag(
-                "IMG.STRUCTURE",
+                CODE_IMG_STRUCTURE.clone(),
                 Severity::Critical,
                 format!("Figure #{idx}: no <img src=...> found inside <figure>"),
                 row,
@@ -168,7 +185,7 @@ pub fn check_images_field(
             && !ALT_ATTR.is_match(img_tag_m.as_str())
         {
             diags.push(make_diag(
-                "IMG.ALT_MISSING",
+                CODE_IMG_ALT_MISSING.clone(),
                 Severity::Log,
                 format!("Figure #{idx}: <img> tag missing alt attribute"),
                 row,
@@ -180,7 +197,7 @@ pub fn check_images_field(
         // ── IMG.NAMESPACE ────────────────────────────────────────────────────
         if !NS_VALID.is_match(src) {
             diags.push(make_diag(
-                "IMG.NAMESPACE",
+                CODE_IMG_NAMESPACE.clone(),
                 Severity::Critical,
                 format!(
                     "Figure #{idx}: src '{src}' does not match required lowercase namespace pattern <slug>_<filename>"
@@ -201,7 +218,7 @@ pub fn check_images_field(
                     .is_some_and(|cl| cl.contains(&src.to_lowercase()));
             if !in_cat {
                 diags.push(make_diag(
-                    "IMG.PHANTOM",
+                    CODE_IMG_PHANTOM.clone(),
                     Severity::Critical,
                     format!("Figure #{idx}: src '{src}' not found in the active catalog"),
                     row,
@@ -216,7 +233,7 @@ pub fn check_images_field(
         // ── IMG.DUP_IN_CARD ──────────────────────────────────────────────────
         if seen_srcs.contains(src) {
             diags.push(make_diag(
-                "IMG.DUP_IN_CARD",
+                CODE_IMG_DUP_IN_CARD.clone(),
                 Severity::Critical,
                 format!("Image '{src}' appears more than once in this card"),
                 row,
@@ -229,7 +246,7 @@ pub fn check_images_field(
         // ── IMG.STRUCTURE (figcaption) ───────────────────────────────────────
         let Some(cap_match) = cap_m else {
             diags.push(make_diag(
-                "IMG.STRUCTURE",
+                CODE_IMG_STRUCTURE.clone(),
                 Severity::Critical,
                 format!("Figure #{idx}: missing <figcaption>"),
                 row,
@@ -244,7 +261,7 @@ pub fn check_images_field(
         // ── IMG.CAPTION & IMG.CAPTION_WEAK ───────────────────────────────────
         if caption.is_empty() {
             diags.push(make_diag(
-                "IMG.CAPTION",
+                CODE_IMG_CAPTION.clone(),
                 Severity::Warn,
                 format!("Figure #{idx}: empty caption"),
                 row,
@@ -253,7 +270,7 @@ pub fn check_images_field(
             ));
         } else if NOISE_RE.is_match(caption) {
             diags.push(make_diag(
-                "IMG.CAPTION",
+                CODE_IMG_CAPTION.clone(),
                 Severity::Warn,
                 format!(
                     "Figure #{idx}: caption appears to contain bibliographic noise (ISBN/Copyright/…)"
@@ -266,7 +283,7 @@ pub fn check_images_field(
             let text_caption = HTML_TAG_RE.replace_all(caption, "").trim().to_string();
             if text_caption.is_empty() {
                 diags.push(make_diag(
-                    "IMG.CAPTION",
+                    CODE_IMG_CAPTION.clone(),
                     Severity::Warn,
                     format!("Figure #{idx}: empty caption"),
                     row,
@@ -278,7 +295,7 @@ pub fn check_images_field(
                 || FILE_EXT_RE.is_match(&text_caption)
             {
                 diags.push(make_diag(
-                    "IMG.CAPTION_WEAK",
+                    CODE_IMG_CAPTION_WEAK.clone(),
                     Severity::Warn,
                     format!(
                         "Figure #{idx}: caption '{text_caption}' is weak (too short, generic, or raw extractor placeholder)"
@@ -355,5 +372,77 @@ mod tests {
         assert!(codes.contains(&"IMG.CAPTION"));
         assert!(codes.contains(&"IMG.DUP_IN_CARD"));
         assert!(codes.contains(&"IMG.STRUCTURE"));
+    }
+
+    #[test]
+    fn namespaced_pattern_with_hyphens_and_leading_hyphen_rejection() {
+        let mut catalog = HashSet::new();
+        catalog.insert("ilae-2025_fig-1.png".to_string());
+        catalog.insert("slug-with-hyphen_image-2.jpeg".to_string());
+
+        // Valid hyphenated slug and filename
+        let html_valid = r#"<figure class="anki-figure"><img src="ilae-2025_fig-1.png" alt="Alt"><figcaption>Descrição clínica longa o suficiente para passar no teste.</figcaption></figure>"#;
+        let diags_valid =
+            check_images_field(html_valid, Some(&catalog), Some(2), "Imagens Relacionadas");
+        assert!(
+            diags_valid.is_empty(),
+            "expected valid hyphenated namespaced filename to pass, got: {diags_valid:?}"
+        );
+
+        // Leading hyphen in slug must be rejected
+        let html_leading_hyphen = r#"<figure class="anki-figure"><img src="-invalid-slug_fig.png" alt="Alt"><figcaption>Descrição clínica longa o suficiente para passar no teste.</figcaption></figure>"#;
+        let diags_leading =
+            check_images_field(html_leading_hyphen, None, Some(3), "Imagens Relacionadas");
+        assert!(
+            diags_leading.iter().any(|d| d.code == CODE_IMG_NAMESPACE),
+            "expected leading hyphen in slug to trigger CODE_IMG_NAMESPACE"
+        );
+
+        // Leading underscore in slug must be rejected
+        let html_leading_underscore = r#"<figure class="anki-figure"><img src="_invalid_slug_fig.png" alt="Alt"><figcaption>Descrição clínica longa o suficiente para passar no teste.</figcaption></figure>"#;
+        let diags_underscore = check_images_field(
+            html_leading_underscore,
+            None,
+            Some(4),
+            "Imagens Relacionadas",
+        );
+        assert!(
+            diags_underscore
+                .iter()
+                .any(|d| d.code == CODE_IMG_NAMESPACE),
+            "expected leading underscore in slug to trigger CODE_IMG_NAMESPACE"
+        );
+    }
+
+    #[test]
+    fn typed_csv_row_number_preserves_row_and_callers() {
+        let mut catalog = HashSet::new();
+        catalog.insert("test_p1.png".to_string());
+        let html = r#"<figure class="anki-figure"><img src="test_p1.png"><figcaption></figcaption></figure>"#;
+
+        // Called via check_images_field_row with CsvRowNumber
+        let row_num = CsvRowNumber::new(10);
+        let diags_typed =
+            check_images_field_row(html, Some(&catalog), row_num, "Imagens Relacionadas");
+        assert!(!diags_typed.is_empty());
+        assert!(diags_typed.iter().all(|d| d.row == Some(10)));
+        assert!(diags_typed.iter().any(|d| d.code == CODE_IMG_CAPTION));
+
+        // Called via check_images_field with Option<usize> (preserving callers)
+        let diags_legacy =
+            check_images_field(html, Some(&catalog), Some(10), "Imagens Relacionadas");
+        assert_eq!(diags_typed, diags_legacy);
+
+        // Constant comparison
+        assert_eq!(CODE_IMG_BARE_IMG.as_str(), "IMG.BARE_IMG");
+        assert_eq!(CODE_IMG_INLINE_STYLE.as_str(), "IMG.INLINE_STYLE");
+        assert_eq!(CODE_IMG_CAP_OVER.as_str(), "IMG.CAP_OVER");
+        assert_eq!(CODE_IMG_STRUCTURE.as_str(), "IMG.STRUCTURE");
+        assert_eq!(CODE_IMG_ALT_MISSING.as_str(), "IMG.ALT_MISSING");
+        assert_eq!(CODE_IMG_NAMESPACE.as_str(), "IMG.NAMESPACE");
+        assert_eq!(CODE_IMG_PHANTOM.as_str(), "IMG.PHANTOM");
+        assert_eq!(CODE_IMG_DUP_IN_CARD.as_str(), "IMG.DUP_IN_CARD");
+        assert_eq!(CODE_IMG_CAPTION.as_str(), "IMG.CAPTION");
+        assert_eq!(CODE_IMG_CAPTION_WEAK.as_str(), "IMG.CAPTION_WEAK");
     }
 }

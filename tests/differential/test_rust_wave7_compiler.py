@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -19,23 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = {"fonte": "Demo.pdf", "pagina": 2, "trecho": "Example."}
 
 try:
-    from tests.differential.conftest import resolve_rust_binary
+    from tests.differential.conftest import OracleRunner
 except ImportError:
-    from conftest import resolve_rust_binary
-
-_binary = resolve_rust_binary
-
-
-def _oracle(op: str, **kwargs: object) -> dict:
-    result = subprocess.run(
-        [str(_binary()), "oracle"],
-        input=json.dumps([{"op": op, **kwargs}], ensure_ascii=False),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(result.stdout)[0]
+    from conftest import OracleRunner
 
 
 def _split_csv_rows(csv_text: str) -> list[list[str]]:
@@ -324,10 +308,10 @@ def _has_evolved_notes_html(drafts: list[dict]) -> list[str]:
         ),
     ],
 )
-def test_compile_draft_parity(drafts: list[dict], options: dict) -> None:
+def test_compile_draft_parity(drafts: list[dict], options: dict, run_oracle: OracleRunner) -> None:
     normalized = [CardDraft.model_validate(d) for d in drafts]
     qa, cl, stats = compile_drafts_to_csv(normalized, **options)
-    rs = _oracle("compile_drafts", drafts=drafts, **options)
+    rs = run_oracle("compile_drafts", drafts=drafts, **options)
     expected_markers = _has_evolved_notes_html(drafts)
     if not expected_markers:
         assert rs == {
@@ -412,10 +396,10 @@ def test_compile_draft_parity(drafts: list[dict], options: dict) -> None:
         ),
     ],
 )
-def test_patch_parity(updates: dict, draft: dict) -> None:
+def test_patch_parity(updates: dict, draft: dict, run_oracle: OracleRunner) -> None:
     card = CardDraft.model_validate(draft)
     expected = apply_patch_to_draft(card, CardPatch(updates=updates)).model_dump(mode="json")
-    rs = _oracle("patch_draft", draft=draft, updates=updates)
+    rs = run_oracle("patch_draft", draft=draft, updates=updates)
     if updates == {"tags": "Neurologia::Tema"}:
         # Wave 2 explicitly canonicalizes alias updates (`tags` -> `etiquetas`) instead of
         # silently retaining `etiquetas: []` like legacy Python `CardDraft(**model_dump())`.
@@ -447,26 +431,22 @@ def test_patch_parity(updates: dict, draft: dict) -> None:
         },
     ],
 )
-def test_patch_rejects_invalid_nested_notes_like_python(notes: dict) -> None:
+def test_patch_rejects_invalid_nested_notes_like_python(
+    notes: dict, run_oracle: OracleRunner
+) -> None:
     draft = {"tipo": "QA", "enunciado_ou_sentenca": "Q", "resposta": "R"}
     with pytest.raises(ValueError):
         apply_patch_to_draft(
             CardDraft.model_validate(draft), CardPatch(updates={"notas_adicionais": notes})
         )
-    result = subprocess.run(
-        [str(_binary()), "oracle"],
-        input=json.dumps(
-            [{"op": "patch_draft", "draft": draft, "updates": {"notas_adicionais": notes}}]
-        ),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
+    result = run_oracle.run_raw_process(
+        [{"op": "patch_draft", "draft": draft, "updates": {"notas_adicionais": notes}}],
         check=False,
     )
     assert result.returncode != 0
 
 
-def test_quarantine_partition_parity() -> None:
+def test_quarantine_partition_parity(run_oracle: OracleRunner) -> None:
     drafts = [
         {"tipo": "QA", "enunciado_ou_sentenca": f"Q{i}", "resposta": f"R{i}"} for i in range(3)
     ]
@@ -479,7 +459,7 @@ def test_quarantine_partition_parity() -> None:
         "quarantined": [c.model_dump(mode="json") for c in quarantined],
     }
     assert (
-        _oracle(
+        run_oracle(
             "partition_quarantine",
             drafts=drafts,
             failed_indices=[1, 1, 8],

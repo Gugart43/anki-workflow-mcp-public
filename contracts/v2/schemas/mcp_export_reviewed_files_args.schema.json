@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments for `export_reviewed_files`.",
+  "properties": {
+    "batch_id": {
+      "type": "string"
+    },
+    "cloze_csv": {
+      "type": "string"
+    },
+    "deck_dir": {
+      "type": "string"
+    },
+    "evaluation_verdict": {
+      "type": "string"
+    },
+    "qa_csv": {
+      "type": "string"
+    },
+    "receipt_hash": {
+      "type": "string"
+    },
+    "topic_slug": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "write_to_deck_root": {
+      "default": true,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "deck_dir",
+    "batch_id",
+    "qa_csv",
+    "cloze_csv",
+    "receipt_hash",
+    "evaluation_verdict"
+  ],
+  "title": "ExportReviewedFilesArgs",
+  "type": "object"
+}

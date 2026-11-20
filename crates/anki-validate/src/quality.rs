@@ -17,11 +17,41 @@ use crate::{BatchInformationReview, review_batch_information};
 pub const QUALITY_SCHEMA_VERSION: &str = "quality_v1";
 const OWNER_SKILL: &str = "anki-post-curator";
 
+/// Validation mode for quality checks: `Quick` for lightweight structural/HTML checks,
+/// or `Strict` for full source grounding and editorial review checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityMode {
+    #[serde(alias = "Quick", alias = "QUICK")]
+    Quick,
+    #[default]
+    #[serde(alias = "Strict", alias = "STRICT")]
+    Strict,
+}
+
+impl QualityMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Quick => "quick",
+            Self::Strict => "strict",
+        }
+    }
+}
+
+impl std::fmt::Display for QualityMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityPrepareInput {
     pub qa_csv: String,
     pub cloze_csv: String,
+    #[serde(default)]
+    pub mode: QualityMode,
     #[serde(default)]
     pub sources: Vec<QualitySource>,
     #[serde(default)]
@@ -33,6 +63,7 @@ pub struct QualityPrepareInput {
 pub struct QualityRequestRef<'a> {
     pub qa_csv: &'a str,
     pub cloze_csv: &'a str,
+    pub mode: QualityMode,
     pub sources: &'a [QualitySource],
     pub obligations: &'a [QualityObligation],
     pub bindings: &'a [QualityBinding],
@@ -45,6 +76,8 @@ pub struct QualityInput {
     pub qa_csv: String,
     pub cloze_csv: String,
     #[serde(default)]
+    pub mode: QualityMode,
+    #[serde(default)]
     pub sources: Vec<QualitySource>,
     #[serde(default)]
     pub obligations: Vec<QualityObligation>,
@@ -54,7 +87,7 @@ pub struct QualityInput {
     pub reviews: Vec<QualityReview>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualitySource {
     pub id: String,
@@ -64,7 +97,7 @@ pub struct QualitySource {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityObligation {
     pub id: String,
@@ -72,7 +105,7 @@ pub struct QualityObligation {
     pub source_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityBinding {
     pub note_type: String,
@@ -83,7 +116,7 @@ pub struct QualityBinding {
     pub evidence: Vec<QualityEvidence>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityEvidence {
     pub source_id: String,
@@ -92,7 +125,7 @@ pub struct QualityEvidence {
     pub scope: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityDimensions {
     pub source_fidelity: bool,
@@ -132,7 +165,7 @@ impl QualityDimensions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QualityReview {
     pub note_type: String,
@@ -146,7 +179,7 @@ pub struct QualityReview {
     pub dimensions: QualityDimensions,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct QualityReport {
     pub schema_version: String,
     pub mode: String,
@@ -253,13 +286,39 @@ fn normalize_crlf_only(text: &str) -> String {
 }
 
 fn compute_snapshot_hash(req: &QualityRequestRef<'_>) -> String {
+    let mut canonical_sources = req.sources.to_vec();
+    canonical_sources.sort();
+
+    let mut canonical_obligations: Vec<QualityObligation> = req
+        .obligations
+        .iter()
+        .map(|obl| {
+            let mut obl = obl.clone();
+            obl.source_ids.sort();
+            obl
+        })
+        .collect();
+    canonical_obligations.sort();
+
+    let mut canonical_bindings: Vec<QualityBinding> = req
+        .bindings
+        .iter()
+        .map(|b| {
+            let mut b = b.clone();
+            b.obligation_ids.sort();
+            b.evidence.sort();
+            b
+        })
+        .collect();
+    canonical_bindings.sort();
+
     let payload = SnapshotPayload {
         schema_version: QUALITY_SCHEMA_VERSION,
         qa_csv: canonical_csv_text(req.qa_csv),
         cloze_csv: canonical_csv_text(req.cloze_csv),
-        sources: req.sources,
-        obligations: req.obligations,
-        bindings: req.bindings,
+        sources: &canonical_sources,
+        obligations: &canonical_obligations,
+        bindings: &canonical_bindings,
     };
     let canonical_json =
         serde_json::to_string(&payload).expect("QualityInput types are always JSON-serializable");
@@ -883,13 +942,18 @@ fn validate_reviews(
     fulfilled_reviews.len()
 }
 
-fn build_guidance(mode: &str) -> Vec<String> {
+fn build_guidance(mode: &str, quality_mode: QualityMode) -> Vec<String> {
     let mut guidance = vec![
         "Excerpt matching verifies literal substring inclusion in caller-supplied QualitySource.text only; it does not prove semantic entailment or clinical correctness.".to_owned(),
         "QualityReview records are self-reported editorial attestations bound to snapshot_hash, not trusted identities or server-issued export authorizations (clinical_correctness_certified and export_authorized remain false).".to_owned(),
         "Advisory length warnings (e.g., NOTE.LENGTH_WARN, CARD.TOO_LONG_*) remain non-blocking review signals in report.review.".to_owned(),
     ];
-    if mode == "prepare" {
+    if quality_mode == QualityMode::Quick {
+        guidance.push(
+            "Quick mode validates structural integrity and HTML security only; it does not certify editorial reviews, source grounding, or export readiness."
+                .to_owned(),
+        );
+    } else if mode == "prepare" {
         guidance.push(
             "Prepared snapshot_hash excludes reviews; collect one current QualityReview per retrieval bound to this snapshot_hash and call evaluate_quality."
                 .to_owned(),
@@ -931,10 +995,6 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         &review,
         &mut diagnostics,
     );
-    diagnostics.extend(crate::quality_content::review_content(
-        req.qa_csv,
-        req.cloze_csv,
-    ));
 
     let retrieval_count = review.total_cards;
     if retrieval_count == 0 {
@@ -944,29 +1004,41 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         ));
     }
 
-    let source_map = validate_sources(req.sources, &mut diagnostics);
-    let obligation_map = validate_obligations(req.obligations, &source_map, &mut diagnostics);
-    let covered_obligations = validate_bindings(
-        req.bindings,
-        &expected_retrievals,
-        &source_map,
-        &obligation_map,
-        &mut diagnostics,
-    );
+    let (obligation_count, covered_obligation_count, reviewed_count) = match req.mode {
+        QualityMode::Quick => (0, 0, 0),
+        QualityMode::Strict => {
+            diagnostics.extend(crate::quality_content::review_content(
+                req.qa_csv,
+                req.cloze_csv,
+            ));
 
-    let reviewed_count = if let Some(reviews) = req.reviews {
-        validate_reviews(
-            reviews,
-            &expected_retrievals,
-            &snapshot_hash,
-            &mut diagnostics,
-        )
-    } else {
-        diagnostics.push(diag_warn(
-            "QUALITY.REVIEWS_REQUIRED",
-            "prepare_quality ignores review state; run evaluate_quality with current per-retrieval reviews",
-        ));
-        0
+            let source_map = validate_sources(req.sources, &mut diagnostics);
+            let obligation_map =
+                validate_obligations(req.obligations, &source_map, &mut diagnostics);
+            let covered_obligations = validate_bindings(
+                req.bindings,
+                &expected_retrievals,
+                &source_map,
+                &obligation_map,
+                &mut diagnostics,
+            );
+
+            let reviewed = if let Some(reviews) = req.reviews {
+                validate_reviews(
+                    reviews,
+                    &expected_retrievals,
+                    &snapshot_hash,
+                    &mut diagnostics,
+                )
+            } else {
+                diagnostics.push(diag_warn(
+                    "QUALITY.REVIEWS_REQUIRED",
+                    "prepare_quality ignores review state; run evaluate_quality with current per-retrieval reviews",
+                ));
+                0
+            };
+            (req.obligations.len(), covered_obligations.len(), reviewed)
+        }
     };
 
     let verdict = if diagnostics.iter().any(|d| d.severity == Severity::Critical) {
@@ -987,10 +1059,10 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         export_authorized: false,
         retrieval_count,
         reviewed_count,
-        obligation_count: req.obligations.len(),
-        covered_obligation_count: covered_obligations.len(),
+        obligation_count,
+        covered_obligation_count,
         diagnostics,
-        guidance: build_guidance(mode),
+        guidance: build_guidance(mode, req.mode),
         review,
     }
 }
@@ -1002,6 +1074,7 @@ pub fn prepare_quality_input(input: &QualityPrepareInput) -> QualityReport {
     let req = QualityRequestRef {
         qa_csv: &input.qa_csv,
         cloze_csv: &input.cloze_csv,
+        mode: input.mode,
         sources: &input.sources,
         obligations: &input.obligations,
         bindings: &input.bindings,
@@ -1017,6 +1090,7 @@ pub fn prepare_quality(input: &QualityInput) -> QualityReport {
     let req = QualityRequestRef {
         qa_csv: &input.qa_csv,
         cloze_csv: &input.cloze_csv,
+        mode: input.mode,
         sources: &input.sources,
         obligations: &input.obligations,
         bindings: &input.bindings,
@@ -1032,6 +1106,7 @@ pub fn evaluate_quality(input: &QualityInput) -> QualityReport {
     let req = QualityRequestRef {
         qa_csv: &input.qa_csv,
         cloze_csv: &input.cloze_csv,
+        mode: input.mode,
         sources: &input.sources,
         obligations: &input.obligations,
         bindings: &input.bindings,
@@ -1049,6 +1124,7 @@ mod tests {
         let prep_input = QualityPrepareInput {
             qa_csv: "Enunciado|Resposta\nPergunta?|Resposta.\n".to_owned(),
             cloze_csv: "Sentença|Notas Adicionais\n{{c1::Item}} teste|Nota.\n".to_owned(),
+            mode: QualityMode::Strict,
             sources: vec![QualitySource {
                 id: "S1".to_owned(),
                 title: "T".to_owned(),
@@ -1067,6 +1143,7 @@ mod tests {
         let legacy_input = QualityInput {
             qa_csv: prep_input.qa_csv.clone(),
             cloze_csv: prep_input.cloze_csv.clone(),
+            mode: QualityMode::Strict,
             sources: prep_input.sources.clone(),
             obligations: prep_input.obligations.clone(),
             bindings: prep_input.bindings.clone(),
@@ -1092,5 +1169,270 @@ mod tests {
             result.is_err(),
             "QualityPrepareInput must deny unknown fields (reviews)"
         );
+    }
+
+    #[test]
+    fn quality_mode_defaults_to_strict() {
+        assert_eq!(QualityMode::default(), QualityMode::Strict);
+
+        let json = serde_json::json!({
+            "qa_csv": "Enunciado|Resposta\nP?|R.\n",
+            "cloze_csv": "Sentença|Notas Adicionais\n{{c1::A}}|N\n"
+        });
+        let prep: QualityPrepareInput = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(prep.mode, QualityMode::Strict);
+
+        let input: QualityInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.mode, QualityMode::Strict);
+    }
+
+    #[test]
+    fn quality_mode_deserializes_variants_case_tolerantly() {
+        let json_quick = serde_json::json!({
+            "qa_csv": "",
+            "cloze_csv": "",
+            "mode": "quick"
+        });
+        let prep: QualityPrepareInput = serde_json::from_value(json_quick).unwrap();
+        assert_eq!(prep.mode, QualityMode::Quick);
+
+        let json_quick_pascal = serde_json::json!({
+            "qa_csv": "",
+            "cloze_csv": "",
+            "mode": "Quick"
+        });
+        let prep2: QualityPrepareInput = serde_json::from_value(json_quick_pascal).unwrap();
+        assert_eq!(prep2.mode, QualityMode::Quick);
+
+        let json_strict = serde_json::json!({
+            "qa_csv": "",
+            "cloze_csv": "",
+            "mode": "strict"
+        });
+        let prep3: QualityPrepareInput = serde_json::from_value(json_strict).unwrap();
+        assert_eq!(prep3.mode, QualityMode::Strict);
+    }
+
+    #[test]
+    fn quick_mode_structural_only_passes_without_graph() {
+        let input = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQual o manejo inicial recomendado no protocolo Alfa?|Administrar conduta de primeira linha.|Neurologia|Nota complementar com contexto suficiente para revisao.||Diretriz 2026|neurologia::alfa\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\nNo manejo do protocolo Alfa, indica-se {{c1::Plasmaferese::terapia}} na fase aguda.|Nota complementar com contexto suficiente para revisao.|Neurologia||Diretriz 2026|neurologia::alfa\n".to_owned(),
+            mode: QualityMode::Quick,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+        };
+        let rep = prepare_quality_input(&input);
+        assert_eq!(rep.verdict, "PASS", "diagnostics: {:?}", rep.diagnostics);
+        assert!(!rep.clinical_correctness_certified);
+        assert!(!rep.export_authorized);
+        assert_eq!(rep.obligation_count, 0);
+        assert_eq!(rep.covered_obligation_count, 0);
+        assert_eq!(rep.reviewed_count, 0);
+        assert!(
+            !rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.REVIEWS_REQUIRED")
+        );
+        assert!(
+            !rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.NO_OBLIGATIONS")
+        );
+    }
+
+    #[test]
+    fn strict_mode_requires_reviews_and_sources() {
+        let input = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQual o manejo inicial recomendado no protocolo Alfa?|Administrar conduta de primeira linha.|Neurologia|Nota complementar com contexto suficiente para revisao.||Diretriz 2026|neurologia::alfa\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\nNo manejo do protocolo Alfa, indica-se {{c1::Plasmaferese::terapia}} na fase aguda.|Nota complementar com contexto suficiente para revisao.|Neurologia||Diretriz 2026|neurologia::alfa\n".to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+        };
+        let rep = prepare_quality_input(&input);
+        assert_eq!(rep.verdict, "INCOMPLETE");
+        assert!(
+            rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.REVIEWS_REQUIRED")
+        );
+        assert!(
+            rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.NO_OBLIGATIONS")
+        );
+    }
+
+    #[test]
+    fn quick_mode_catches_unsafe_html() {
+        let input = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\n<script>alert(1)</script>|Resposta.|Cardiologia||||\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n{{c1::Item}} teste|Nota.|Cardiologia|||\n".to_owned(),
+            mode: QualityMode::Quick,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+        };
+        let rep = prepare_quality_input(&input);
+        assert_eq!(rep.verdict, "FAIL");
+        assert!(
+            rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.UNSAFE_HTML")
+        );
+    }
+
+    #[test]
+    fn quick_mode_catches_structural_card_criticals() {
+        let input = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\n|Resposta.|Cardiologia||||\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n{{c1::Item}} teste|Nota.|Cardiologia|||\n".to_owned(),
+            mode: QualityMode::Quick,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+        };
+        let rep = prepare_quality_input(&input);
+        assert_eq!(rep.verdict, "FAIL");
+        assert!(
+            rep.diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "QUALITY.MALFORMED_QA")
+        );
+    }
+
+    #[test]
+    fn canonical_snapshot_invariant_to_all_permutations() {
+        let src1 = QualitySource {
+            id: "S1".to_owned(),
+            title: "Fonte 1".to_owned(),
+            version: "v1".to_owned(),
+            locator: "loc1".to_owned(),
+            text: "Texto fonte 1".to_owned(),
+        };
+        let src2 = QualitySource {
+            id: "S2".to_owned(),
+            title: "Fonte 2".to_owned(),
+            version: "v2".to_owned(),
+            locator: "loc2".to_owned(),
+            text: "Texto fonte 2".to_owned(),
+        };
+
+        let obl1 = QualityObligation {
+            id: "O1".to_owned(),
+            description: "Oblig 1".to_owned(),
+            source_ids: vec!["S2".to_owned(), "S1".to_owned()],
+        };
+        let obl2 = QualityObligation {
+            id: "O2".to_owned(),
+            description: "Oblig 2".to_owned(),
+            source_ids: vec!["S1".to_owned()],
+        };
+
+        let ev1 = QualityEvidence {
+            source_id: "S1".to_owned(),
+            quote: "Texto".to_owned(),
+            locator: "p.1".to_owned(),
+            scope: "retrieval".to_owned(),
+        };
+        let ev2 = QualityEvidence {
+            source_id: "S2".to_owned(),
+            quote: "fonte 2".to_owned(),
+            locator: "p.2".to_owned(),
+            scope: "retrieval".to_owned(),
+        };
+
+        let binding1 = QualityBinding {
+            note_type: "QA".to_owned(),
+            source_row: 2,
+            cloze_index: None,
+            obligation_ids: vec!["O2".to_owned(), "O1".to_owned()],
+            evidence: vec![ev2.clone(), ev1.clone()],
+        };
+        let binding2 = QualityBinding {
+            note_type: "CL".to_owned(),
+            source_row: 2,
+            cloze_index: Some(1),
+            obligation_ids: vec!["O1".to_owned()],
+            evidence: vec![ev1.clone()],
+        };
+
+        // Permuted version of inputs
+        let mut obl1_sorted_sources = obl1.clone();
+        obl1_sorted_sources.source_ids = vec!["S1".to_owned(), "S2".to_owned()];
+
+        let mut binding1_sorted = binding1.clone();
+        binding1_sorted.obligation_ids = vec!["O1".to_owned(), "O2".to_owned()];
+        binding1_sorted.evidence = vec![ev1.clone(), ev2.clone()];
+
+        let input_orig = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta\nP?|R.\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais\n{{c1::A}}|N\n".to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![src1.clone(), src2.clone()],
+            obligations: vec![obl1.clone(), obl2.clone()],
+            bindings: vec![binding1.clone(), binding2.clone()],
+        };
+
+        let input_permuted = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta\nP?|R.\n".to_owned(),
+            cloze_csv: "Sentença|Notas Adicionais\n{{c1::A}}|N\n".to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![src2.clone(), src1.clone()],
+            obligations: vec![obl2.clone(), obl1_sorted_sources],
+            bindings: vec![binding2.clone(), binding1_sorted],
+        };
+
+        let rep_orig = prepare_quality_input(&input_orig);
+        let rep_perm = prepare_quality_input(&input_permuted);
+
+        assert_eq!(rep_orig.snapshot_hash, rep_perm.snapshot_hash);
+    }
+
+    #[test]
+    fn canonical_snapshot_preserves_multiplicity() {
+        let src1 = QualitySource {
+            id: "S1".to_owned(),
+            title: "Fonte 1".to_owned(),
+            version: "v1".to_owned(),
+            locator: "loc1".to_owned(),
+            text: "Texto".to_owned(),
+        };
+
+        let input_single = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta\nP?|R.\n".to_owned(),
+            cloze_csv: "".to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![src1.clone()],
+            obligations: vec![],
+            bindings: vec![],
+        };
+
+        let input_duplicate = QualityPrepareInput {
+            qa_csv: "Enunciado|Resposta\nP?|R.\n".to_owned(),
+            cloze_csv: "".to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![src1.clone(), src1.clone()],
+            obligations: vec![],
+            bindings: vec![],
+        };
+
+        let rep_single = prepare_quality_input(&input_single);
+        let rep_dup = prepare_quality_input(&input_duplicate);
+
+        assert_ne!(
+            rep_single.snapshot_hash, rep_dup.snapshot_hash,
+            "Multiplicity distinction must be preserved in snapshot hash"
+        );
+    }
+
+    #[test]
+    fn quality_report_json_schema() {
+        let schema = schemars::schema_for!(QualityReport);
+        let val = serde_json::to_value(&schema).unwrap();
+        assert!(val.is_object());
     }
 }

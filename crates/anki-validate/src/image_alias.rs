@@ -6,9 +6,22 @@ use serde_json::{Value, json};
 
 static FIG_PARSE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?is)<figure\b[^>]*>\s*<img\b[^>]*src=["']([^"']+)["'][^>]*>\s*(?:<figcaption\b[^>]*>(.*?)</figcaption>)?\s*</figure>"#,
+        r#"(?is)<figure\b([^>]*)>\s*<img\b[^>]*src=["']([^"']+)["'][^>]*>\s*(?:<figcaption\b[^>]*>(.*?)</figcaption>)?\s*</figure>"#,
     )
     .expect("valid figure regex")
+});
+
+static ANKI_FIGURE_CLASS_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)\bclass\s*=\s*(?:["'][^"']*\banki-figure\b[^"']*["']|\banki-figure\b)"#)
+        .expect("valid anki-figure class regex")
+});
+
+static FIG_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<figure\b[^>]*>.*?</figure>").expect("valid figure block regex")
+});
+
+static UNCLOSED_FIG_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)<figure\b[^>]*>.*$").expect("valid unclosed figure block regex")
 });
 
 static BARE_IMG_PARSE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -46,10 +59,10 @@ pub fn parse_images_html_to_figures(value: &Value) -> Vec<Value> {
 
             let mut figures = Vec::new();
             for caps in FIG_PARSE_RE.captures_iter(s) {
-                let full_tag = caps.get(0).map_or("", |m| m.as_str());
-                let filename = caps.get(1).map_or("", |m| m.as_str()).trim();
-                let caption = caps.get(2).map_or("", |m| m.as_str()).trim();
-                let style = if full_tag.contains("anki-figure") {
+                let open_attrs = caps.get(1).map_or("", |m| m.as_str());
+                let filename = caps.get(2).map_or("", |m| m.as_str()).trim();
+                let caption = caps.get(3).map_or("", |m| m.as_str()).trim();
+                let style = if ANKI_FIGURE_CLASS_RE.is_match(open_attrs) {
                     "clinical"
                 } else {
                     ""
@@ -59,11 +72,26 @@ pub fn parse_images_html_to_figures(value: &Value) -> Vec<Value> {
                 }
             }
 
-            let outside = FIG_PARSE_RE.replace_all(s, "");
-            for caps in BARE_IMG_PARSE_RE.captures_iter(&outside) {
-                let filename = caps.get(1).map_or("", |m| m.as_str()).trim();
-                if !filename.is_empty() {
-                    let rem_text = HTML_TAG_RE.replace_all(&outside, " ").trim().to_string();
+            // Exclude figure blocks (including malformed and unclosed) before loose img scan
+            let outside = FIG_BLOCK_RE.replace_all(s, "");
+            let outside = UNCLOSED_FIG_BLOCK_RE.replace_all(&outside, "");
+
+            let bare_filenames: Vec<&str> = BARE_IMG_PARSE_RE
+                .captures_iter(&outside)
+                .filter_map(|caps| {
+                    caps.get(1)
+                        .map(|m| m.as_str().trim())
+                        .filter(|fn_str| !fn_str.is_empty())
+                })
+                .collect();
+
+            if !bare_filenames.is_empty() {
+                let rem_text = if bare_filenames.len() == 1 {
+                    HTML_TAG_RE.replace_all(&outside, " ").trim().to_string()
+                } else {
+                    String::new()
+                };
+                for filename in bare_filenames {
                     figures.push(make_figure_json(filename, &rem_text, ""));
                 }
             }
@@ -180,5 +208,97 @@ mod tests {
         assert_eq!(deduped[0]["filename"], json!("  a.png "));
         assert_eq!(deduped[0]["caption"], json!("First"));
         assert_eq!(deduped[1]["filename"], json!("b.jpg"));
+    }
+
+    #[test]
+    fn figure_class_only_in_opening_attributes_and_malicious_text() {
+        // Valid AnkiMBR standard figure
+        let html_valid = json!(
+            r#"<figure class="anki-figure"><img src="ilae-2025_fig-1.png"><figcaption>Legenda clínica explicativa</figcaption></figure>"#
+        );
+        let parsed_valid = parse_images_html_to_figures(&html_valid);
+        assert_eq!(parsed_valid.len(), 1);
+        assert_eq!(
+            parsed_valid[0],
+            json!({
+                "filename": "ilae-2025_fig-1.png",
+                "caption": "Legenda clínica explicativa",
+                "style": "clinical"
+            })
+        );
+
+        // Multiple classes in opening attribute
+        let html_multi_class = json!(
+            r#"<figure class="card-media anki-figure responsive"><img src="multi.png"><figcaption>Legenda</figcaption></figure>"#
+        );
+        let parsed_multi = parse_images_html_to_figures(&html_multi_class);
+        assert_eq!(parsed_multi.len(), 1);
+        assert_eq!(parsed_multi[0]["style"], "clinical");
+
+        // Malicious / ambiguous text inside figcaption should NOT grant "clinical" style
+        let html_fake_caption = json!(
+            r#"<figure><img src="fake_cap.png"><figcaption>Texto com class="anki-figure" na legenda</figcaption></figure>"#
+        );
+        let parsed_fake_cap = parse_images_html_to_figures(&html_fake_caption);
+        assert_eq!(parsed_fake_cap.len(), 1);
+        assert_eq!(parsed_fake_cap[0]["style"], "");
+
+        // Malicious non-class attribute in opening tag should NOT grant "clinical" style
+        let html_fake_attr = json!(
+            r#"<figure data-note="anki-figure" title="anki-figure"><img src="fake_attr.png"><figcaption>Legenda</figcaption></figure>"#
+        );
+        let parsed_fake_attr = parse_images_html_to_figures(&html_fake_attr);
+        assert_eq!(parsed_fake_attr.len(), 1);
+        assert_eq!(parsed_fake_attr[0]["style"], "");
+
+        // Malicious alt attribute in img should NOT grant "clinical" style
+        let html_fake_alt = json!(
+            r#"<figure><img src="fake_alt.png" alt='class="anki-figure"'><figcaption>Legenda</figcaption></figure>"#
+        );
+        let parsed_fake_alt = parse_images_html_to_figures(&html_fake_alt);
+        assert_eq!(parsed_fake_alt.len(), 1);
+        assert_eq!(parsed_fake_alt[0]["style"], "");
+    }
+
+    #[test]
+    fn no_duplicated_remainder_captions_across_multiple_loose_images() {
+        // Multiple loose images: remainder text must not be replicated
+        let html_multi_loose = json!(
+            r#"Texto inicial <img src="loose_a.png"> texto intermediário <img src="loose_b.png"> texto final"#
+        );
+        let parsed_multi = parse_images_html_to_figures(&html_multi_loose);
+        assert_eq!(parsed_multi.len(), 2);
+        assert_eq!(
+            parsed_multi[0],
+            json!({"filename": "loose_a.png", "caption": "", "style": ""})
+        );
+        assert_eq!(
+            parsed_multi[1],
+            json!({"filename": "loose_b.png", "caption": "", "style": ""})
+        );
+
+        // Single loose image: remainder text is preserved
+        let html_single_loose = json!(r#"Texto único explicativo <img src="single.png">"#);
+        let parsed_single = parse_images_html_to_figures(&html_single_loose);
+        assert_eq!(parsed_single.len(), 1);
+        assert_eq!(
+            parsed_single[0],
+            json!({"filename": "single.png", "caption": "Texto único explicativo", "style": ""})
+        );
+    }
+
+    #[test]
+    fn malformed_figure_blocks_excluded_before_loose_img_scan() {
+        // Malformed figure with broken content should not leak inner images into bare scan
+        let html_malformed = json!(
+            r#"<figure class="broken"><p>broken table</p><img src="inner_broken.png">trailing text</figure> Fora <img src="real_loose.png">"#
+        );
+        let parsed = parse_images_html_to_figures(&html_malformed);
+        // inner_broken.png was inside a <figure> block (malformed) so it is excluded from loose scan
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0],
+            json!({"filename": "real_loose.png", "caption": "Fora", "style": ""})
+        );
     }
 }

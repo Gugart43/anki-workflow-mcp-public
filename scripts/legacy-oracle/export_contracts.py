@@ -78,7 +78,9 @@ async def export_all() -> None:
     )
 
     _dump_json(OUT_DIR / "tools.json", {"count": len(tools_data), "tools": tools_data})
-    _dump_json(OUT_DIR / "resources.json", {"count": len(resources_data), "resources": resources_data})
+    _dump_json(
+        OUT_DIR / "resources.json", {"count": len(resources_data), "resources": resources_data}
+    )
     _dump_json(OUT_DIR / "prompts.json", {"count": len(prompts_data), "prompts": prompts_data})
 
     import sys

@@ -1,0 +1,42 @@
+{
+  "name": "@gugart43/anki-workflow-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Anki flashcard workflows (thin npx launcher without postinstall).",
+  "license": "MIT",
+  "author": "anki-workflow-mcp contributors",
+  "homepage": "https://github.com/Gugart43/anki-workflow-mcp-public#readme",
+  "bugs": {
+    "url": "https://github.com/Gugart43/anki-workflow-mcp-public/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gugart43/anki-workflow-mcp-public.git",
+    "directory": "npm/anki-workflow-mcp"
+  },
+  "keywords": [
+    "anki",
+    "mcp",
+    "model-context-protocol",
+    "flashcards",
+    "rust"
+  ],
+  "bin": {
+    "anki-workflow-mcp": "./bin/anki-workflow-mcp.cjs"
+  },
+  "files": [
+    "bin/anki-workflow-mcp.cjs",
+    "checksums.json"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "optionalDependencies": {
+    "@gugart43/anki-workflow-mcp-linux-x64-gnu": "0.1.0",
+    "@gugart43/anki-workflow-mcp-win32-x64": "0.1.0",
+    "@gugart43/anki-workflow-mcp-darwin-arm64": "0.1.0",
+    "@gugart43/anki-workflow-mcp-darwin-x64": "0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

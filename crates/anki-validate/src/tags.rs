@@ -1,14 +1,20 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use anki_domain::{Diagnostic, Severity};
+use anki_domain::{CsvRowNumber, Diagnostic, DiagnosticCode, Severity};
 use regex::Regex;
+
+pub const CODE_TAG_FORMAT: DiagnosticCode = DiagnosticCode::from_static("TAG.FORMAT");
+pub const CODE_TAG_DEPTH: DiagnosticCode = DiagnosticCode::from_static("TAG.DEPTH");
+pub const CODE_TAG_UNREGISTERED: DiagnosticCode = DiagnosticCode::from_static("TAG.UNREGISTERED");
 
 const OWNER_SKILL: &str = "anki-registry";
 const SEPARATOR: &str = "::";
 
-static VALID_TAG_CHARS_NO_SEP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-zÀ-ÿ0-9_]+$").expect("valid tag chars regex"));
+// Latin-1 alphanumeric + underscore, explicitly rejecting multiplication sign (×, \u{00D7})
+// and division sign (÷, \u{00F7}) that fall inside the naive \u{00C0}-\u{00FF} range.
+static VALID_TAG_SEGMENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_À-ÖØ-öø-ÿ]+$").expect("valid tag segment regex"));
 
 fn depth(tag: &str) -> usize {
     tag.matches(SEPARATOR).count() + 1
@@ -16,7 +22,11 @@ fn depth(tag: &str) -> usize {
 
 fn attach_location(mut diag: Diagnostic, row: Option<usize>, field: &str) -> Diagnostic {
     if let Some(r) = row {
-        diag = diag.with_row(r);
+        if let Some(row_num) = CsvRowNumber::new(r) {
+            diag = diag.with_row(row_num);
+        } else {
+            diag = diag.with_row(r);
+        }
     }
     diag.with_field(field)
 }
@@ -38,10 +48,12 @@ pub fn check_tags(
             continue;
         }
 
-        let tag_for_check = tag.replace(SEPARATOR, "");
-        if !tag_for_check.is_empty() && !VALID_TAG_CHARS_NO_SEP.is_match(&tag_for_check) {
+        let is_valid = tag
+            .split(SEPARATOR)
+            .all(|seg| !seg.is_empty() && VALID_TAG_SEGMENT.is_match(seg));
+        if !is_valid {
             let diag = Diagnostic::new(
-                anki_domain::DiagnosticCode::from_static("TAG.FORMAT"),
+                CODE_TAG_FORMAT,
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' contains invalid characters"),
@@ -53,7 +65,7 @@ pub fn check_tags(
         let tag_depth = depth(tag);
         if tag_depth > 4 {
             let diag = Diagnostic::new(
-                anki_domain::DiagnosticCode::from_static("TAG.DEPTH"),
+                CODE_TAG_DEPTH,
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' has depth {tag_depth} (maximum is 4 levels)"),
@@ -65,7 +77,7 @@ pub fn check_tags(
             && !nodes.contains(tag)
         {
             let diag = Diagnostic::new(
-                anki_domain::DiagnosticCode::from_static("TAG.UNREGISTERED"),
+                CODE_TAG_UNREGISTERED,
                 Severity::Critical,
                 OWNER_SKILL,
                 format!("Tag '{tag}' is not registered in the Manifesto taxonomy"),
@@ -112,6 +124,38 @@ mod tests {
                 "Etiquetas"
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn rejects_empty_hierarchy_segments() {
+        for bad in &["::", "::Medicina", "Medicina::", "A::::B"] {
+            let diags = check_tags(bad, None, Some(2), "Etiquetas");
+            assert!(
+                diags.iter().any(|d| d.code == CODE_TAG_FORMAT),
+                "Tag '{bad}' should be rejected for having empty hierarchy segments"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_multiplication_and_division_glyphs() {
+        for bad in &["Medicina×Cirurgia", "Dose÷2", "A::B×C", "X÷Y::Z"] {
+            let diags = check_tags(bad, None, Some(2), "Etiquetas");
+            assert!(
+                diags.iter().any(|d| d.code == CODE_TAG_FORMAT),
+                "Tag '{bad}' should be rejected for containing × or ÷"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_all_portuguese_diacritics() {
+        let tag = "Atenção::Ação::Órgão::Saúde";
+        let diags = check_tags(tag, None, Some(2), "Etiquetas");
+        assert!(
+            diags.is_empty(),
+            "Tag with Portuguese diacritics should pass: {diags:?}"
         );
     }
 

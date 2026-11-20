@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Modo de compilação do documento de notas adicionais.",
+  "enum": [
+    "legacy_compat",
+    "strict_v2"
+  ],
+  "title": "CompileMode",
+  "type": "string"
+}

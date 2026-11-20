@@ -1,0 +1,169 @@
+{
+  "$defs": {
+    "QualityBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "cloze_index": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/QualityEvidence"
+          },
+          "type": "array"
+        },
+        "note_type": {
+          "type": "string"
+        },
+        "obligation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source_row": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "note_type",
+        "source_row",
+        "obligation_ids",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "QualityEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string"
+        },
+        "quote": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "quote",
+        "locator",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "QualityMode": {
+      "description": "Validation mode for quality checks: `Quick` for lightweight structural/HTML checks,\nor `Strict` for full source grounding and editorial review checks.",
+      "enum": [
+        "quick",
+        "strict"
+      ],
+      "type": "string"
+    },
+    "QualityObligation": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "source_ids"
+      ],
+      "type": "object"
+    },
+    "QualitySource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "locator": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "version",
+        "locator",
+        "text"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindings": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QualityBinding"
+      },
+      "type": "array"
+    },
+    "cloze_csv": {
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/QualityMode",
+      "default": "strict"
+    },
+    "obligations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QualityObligation"
+      },
+      "type": "array"
+    },
+    "qa_csv": {
+      "type": "string"
+    },
+    "sources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/QualitySource"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "qa_csv",
+    "cloze_csv"
+  ],
+  "title": "QualityPrepareInput",
+  "type": "object"
+}

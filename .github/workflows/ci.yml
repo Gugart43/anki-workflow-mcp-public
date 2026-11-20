@@ -14,6 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Path filters
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mcp_contract: ${{ steps.filter.outputs.mcp_contract }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+      npm: ${{ steps.filter.outputs.npm }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            mcp_contract:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'apps/anki-workflow-mcp/**'
+              - 'crates/**'
+              - 'tests/mcp-contract-ts/**'
+              - '.github/workflows/ci.yml'
+            contracts:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/anki-domain/**'
+              - 'crates/anki-validate/**'
+              - 'apps/anki-workflow-mcp/**'
+              - 'contracts/v2/**'
+              - 'tools/codegen-ts/**'
+              - '.github/workflows/ci.yml'
+            npm:
+              - 'npm/**'
+              - '.github/workflows/ci.yml'
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -28,12 +69,12 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@400e7407cfd7a091e5fbb6afec01ec146c432b7c # v2.7.7
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -44,16 +85,24 @@ jobs:
       - name: Test workspace
         run: cargo test --workspace --locked
 
-      - name: Build binary for parity
-        if: matrix.os == 'ubuntu-latest'
+      - name: Build binary for parity / MCP contract
         run: cargo build --locked --features oracle -p anki-workflow-mcp
 
-      - name: Upload Rust binary
+      - name: Upload Linux Rust binary
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: anki-workflow-mcp-linux-debug
           path: target/debug/anki-workflow-mcp
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload Windows Rust binary
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: anki-workflow-mcp-windows-debug
+          path: target/debug/anki-workflow-mcp.exe
           retention-days: 1
           if-no-files-found: error
 
@@ -71,7 +120,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        uses: astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287 # v5.3.0
         with:
           enable-cache: true
 
@@ -98,7 +147,7 @@ jobs:
           persist-credentials: false
 
       - name: Download Rust binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: anki-workflow-mcp-linux-debug
           path: target/debug
@@ -107,7 +156,7 @@ jobs:
         run: chmod +x target/debug/anki-workflow-mcp
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        uses: astral-sh/setup-uv@1edb52594c857e2b5b13128931090f0640537287 # v5.3.0
         with:
           enable-cache: true
 
@@ -119,10 +168,148 @@ jobs:
           ANKI_RUST_BIN: ${{ github.workspace }}/target/debug/anki-workflow-mcp
         run: uv run --frozen pytest tests/differential/
 
+  mcp-contract-ts:
+    name: MCP Contract TS (${{ matrix.os }})
+    needs: [changes, rust]
+    if: ${{ needs.rust.result == 'success' && (github.event_name == 'push' || needs.changes.outputs.mcp_contract == 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Rust binary (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: anki-workflow-mcp-linux-debug
+          path: target/debug
+
+      - name: Download Rust binary (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: anki-workflow-mcp-windows-debug
+          path: target/debug
+
+      - name: Mark binary executable
+        if: matrix.os == 'ubuntu-latest'
+        run: chmod +x target/debug/anki-workflow-mcp
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10.26.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: tests/mcp-contract-ts/pnpm-lock.yaml
+
+      - name: Install TS contract dependencies (frozen)
+        working-directory: tests/mcp-contract-ts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck and run TS MCP E2E contract tests (Unix)
+        if: matrix.os != 'windows-latest'
+        working-directory: tests/mcp-contract-ts
+        env:
+          ANKI_MCP_BIN: ${{ github.workspace }}/target/debug/anki-workflow-mcp
+        run: pnpm run check
+
+      - name: Typecheck and run TS MCP E2E contract tests (Windows)
+        if: matrix.os == 'windows-latest'
+        working-directory: tests/mcp-contract-ts
+        env:
+          ANKI_MCP_BIN: ${{ github.workspace }}/target/debug/anki-workflow-mcp.exe
+        run: pnpm run check
+
+  schema-drift:
+    name: Schema Drift (ubuntu-latest)
+    needs: [changes]
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.contracts == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@400e7407cfd7a091e5fbb6afec01ec146c432b7c # v2.7.7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10.26.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: tools/codegen-ts/pnpm-lock.yaml
+
+      - name: Export Rust JSON Schemas
+        run: cargo run --locked -p anki-workflow-mcp --bin export-schemas
+
+      - name: Install codegen-ts dependencies, run tests, and check
+        working-directory: tools/codegen-ts
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm test
+          pnpm run check
+          node generate.mjs --check
+
+      - name: Fail on schema or TypeScript contract drift
+        shell: bash
+        run: |
+          git diff --exit-code -- contracts/v2/
+          test -z "$(git status --porcelain -- contracts/v2/)"
+
+  npm:
+    name: NPM Launcher (${{ matrix.os }})
+    needs: [changes]
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.npm == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10.26.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Run NPM launcher tests
+        shell: bash
+        run: node --test npm/test/*.test.mjs
+
   test:
     name: Test (${{ matrix.os }})
     # Protected required check aggregate (fail-closed)
-    needs: [rust, python, parity]
+    needs: [changes, rust, python, parity, mcp-contract-ts, schema-drift, npm]
     if: ${{ always() }}
     strategy:
       fail-fast: false
@@ -131,14 +318,38 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
-      - name: Require rust, python, and parity success
+      - name: Require all applicable jobs to succeed
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MCP_CONTRACT_CHANGED: ${{ needs.changes.outputs.mcp_contract }}
+          CONTRACTS_CHANGED: ${{ needs.changes.outputs.contracts }}
+          NPM_CHANGED: ${{ needs.changes.outputs.npm }}
           RUST_RESULT: ${{ needs.rust.result }}
           PYTHON_RESULT: ${{ needs.python.result }}
           PARITY_RESULT: ${{ needs.parity.result }}
+          MCP_CONTRACT_TS_RESULT: ${{ needs.mcp-contract-ts.result }}
+          SCHEMA_DRIFT_RESULT: ${{ needs.schema-drift.result }}
+          NPM_RESULT: ${{ needs.npm.result }}
         shell: bash
         run: |
+          test "$CHANGES_RESULT" = "success"
           test "$RUST_RESULT" = "success"
           test "$PYTHON_RESULT" = "success"
           test "$PARITY_RESULT" = "success"
+          if [ "$EVENT_NAME" = "push" ] || [ "$MCP_CONTRACT_CHANGED" = "true" ]; then
+            test "$MCP_CONTRACT_TS_RESULT" = "success"
+          else
+            test "$MCP_CONTRACT_TS_RESULT" = "success" -o "$MCP_CONTRACT_TS_RESULT" = "skipped"
+          fi
+          if [ "$EVENT_NAME" = "push" ] || [ "$CONTRACTS_CHANGED" = "true" ]; then
+            test "$SCHEMA_DRIFT_RESULT" = "success"
+          else
+            test "$SCHEMA_DRIFT_RESULT" = "success" -o "$SCHEMA_DRIFT_RESULT" = "skipped"
+          fi
+          if [ "$EVENT_NAME" = "push" ] || [ "$NPM_CHANGED" = "true" ]; then
+            test "$NPM_RESULT" = "success"
+          else
+            test "$NPM_RESULT" = "success" -o "$NPM_RESULT" = "skipped"
+          fi
 

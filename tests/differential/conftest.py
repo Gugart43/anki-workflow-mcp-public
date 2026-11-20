@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 from functools import cache
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -51,3 +53,38 @@ def resolve_rust_binary() -> Path:
 @pytest.fixture(scope="session")
 def rust_binary() -> Path:
     return resolve_rust_binary()
+
+
+class OracleRunner:
+    """Consolidated runner for Rust oracle subprocess requests."""
+
+    def __init__(self, binary: Path) -> None:
+        self.binary = binary
+
+    def run_raw_process(
+        self, requests: list[dict[str, Any]], check: bool = True
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(self.binary), "oracle"],
+            input=json.dumps(requests, ensure_ascii=False),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=check,
+        )
+
+    def raw(self, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        proc = self.run_raw_process(requests, check=True)
+        return json.loads(proc.stdout)
+
+    def batch(self, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return self.raw(requests)
+
+    def __call__(self, op: str, **kwargs: Any) -> dict[str, Any]:
+        results = self.raw([{"op": op, **kwargs}])
+        return results[0]
+
+
+@pytest.fixture(scope="session")
+def run_oracle(rust_binary: Path) -> OracleRunner:
+    return OracleRunner(rust_binary)

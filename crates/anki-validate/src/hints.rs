@@ -42,6 +42,53 @@ static ALT_SLASH: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b([A-Z]{2,6})\s*/\s*([A-Z]{2,6})\b").expect("valid alt_slash regex")
 });
 
+static SHORT_ACRONYM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[A-Z][A-Z0-9]{1,3}\b").expect("valid short acronym regex"));
+
+/// Check whether two tokens share a common inflected root based on longest common prefix.
+///
+/// Requires `lcp >= 5` and `lcp * 10 >= min_len * 7`.
+#[must_use]
+pub fn shares_inflected_root(a: &str, b: &str) -> bool {
+    let mut lcp = 0usize;
+    for (ca, cb) in a.chars().zip(b.chars()) {
+        if ca == cb {
+            lcp += 1;
+        } else {
+            break;
+        }
+    }
+    let min_len = a.chars().count().min(b.chars().count());
+    lcp >= 5 && (lcp * 10 >= min_len * 7)
+}
+
+/// Check if a short acronym in target (2-4 chars) is leaked in hint.
+///
+/// 2-letter acronyms require an exact uppercase match in hint (avoiding false positives on "em").
+/// 3-4 letter acronyms match case-insensitively.
+#[must_use]
+pub fn has_acronym_leak(target: &str, hint: &str) -> bool {
+    for mat in SHORT_ACRONYM_RE.find_iter(target) {
+        let acr = mat.as_str();
+        if acr.len() == 2 {
+            let pat = format!(r"\b{}\b", regex::escape(acr));
+            if let Ok(re) = Regex::new(&pat)
+                && re.is_match(hint)
+            {
+                return true;
+            }
+        } else if (3..=4).contains(&acr.len()) {
+            let pat = format!(r"(?i)\b{}\b", regex::escape(acr));
+            if let Ok(re) = Regex::new(&pat)
+                && re.is_match(hint)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Pure Rust ASCII/Latin diacritic folding for NFD-like normalization without external dependencies.
 ///
 /// Strips combining marks (Unicode `Mn`) and maps accented Latin characters to their ASCII bases.
@@ -112,7 +159,7 @@ pub fn token_overlap_ratio(a: &str, b: &str) -> f64 {
     }
 }
 
-/// Check if `hint` literally contains a content word (≥5 characters) from `target`.
+/// Check if `hint` literally contains a content word (≥5 characters) or short acronym from `target`.
 ///
 /// Excludes common medical/anatomical modifiers (`COMMON_MODIFIERS`).
 #[must_use]
@@ -120,17 +167,29 @@ pub fn has_root_leak(target: &str, hint: &str) -> bool {
     let nt = normalize_hint_text(target);
     let nh = normalize_hint_text(hint);
 
-    let target_tokens: HashSet<&str> = nt.split_whitespace().collect();
-    let hint_tokens: HashSet<&str> = nh.split_whitespace().collect();
+    let target_tokens: Vec<&str> = nt.split_whitespace().collect();
+    let hint_tokens: Vec<&str> = nh.split_whitespace().collect();
     let modifier_set: HashSet<&str> = COMMON_MODIFIERS.iter().copied().collect();
 
-    let leaked: HashSet<&str> = target_tokens
-        .intersection(&hint_tokens)
-        .copied()
-        .filter(|w| !modifier_set.contains(w) && w.chars().count() >= 5)
-        .collect();
+    for t in &target_tokens {
+        if modifier_set.contains(t) || t.chars().count() < 5 {
+            continue;
+        }
+        for h in &hint_tokens {
+            if modifier_set.contains(h) || h.chars().count() < 5 {
+                continue;
+            }
+            if t == h || shares_inflected_root(t, h) {
+                return true;
+            }
+        }
+    }
 
-    !leaked.is_empty()
+    if has_acronym_leak(target, hint) {
+        return true;
+    }
+
+    false
 }
 
 fn make_hint_diag(
@@ -320,10 +379,65 @@ mod tests {
 
     #[test]
     fn test_elimination_alternation_pattern() {
-        let s = "O anti-hipertensivo de escolha é {{c1::IECA::IECA ou BRA}}.";
+        let s = "O anti-hipertensivo de escolha é {{c1::enalapril::IECA ou BRA}}.";
         let diags = check_hints(s, None, None);
         assert!(has_code(&diags, "HINT.ELIMINATION"));
         assert_eq!(worst_severity(&diags), "WARN");
+
+        let s_leak = "O anti-hipertensivo de escolha é {{c1::IECA::IECA ou BRA}}.";
+        let diags_leak = check_hints(s_leak, None, None);
+        assert!(has_code(&diags_leak, "HINT.ELIMINATION"));
+        assert!(has_code(&diags_leak, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_leak), "FAIL");
+    }
+
+    #[test]
+    fn test_short_acronym_leak_and_em_preposition_regression() {
+        // 2-letter acronym: "em" preposition in hint must NOT trigger false positive ROOT_LEAK
+        let s_em_prep = "Diagnóstico provável de {{c1::EM::doença autoimune desmielinizante comum em mulheres jovens}}.";
+        let diags_em_prep = check_hints(s_em_prep, None, None);
+        assert!(!has_code(&diags_em_prep, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_em_prep), "PASS");
+
+        // 2-letter acronym: uppercase "EM" in hint must trigger ROOT_LEAK
+        let s_em_leak = "Diagnóstico provável de {{c1::EM::sigla EM para esclerose múltipla}}.";
+        let diags_em_leak = check_hints(s_em_leak, None, None);
+        assert!(has_code(&diags_em_leak, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_em_leak), "FAIL");
+
+        // 3-4 letter acronyms match case-insensitively (IECA, AVC, DPOC)
+        let s_avc = "Conduta imediata no {{c1::AVC::protocolo de avc isquêmico}}.";
+        let diags_avc = check_hints(s_avc, None, None);
+        assert!(has_code(&diags_avc, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_avc), "FAIL");
+
+        let s_dpoc = "Manejo da {{c1::DPOC::exacerbação de dpoc}} com broncodilatador.";
+        let diags_dpoc = check_hints(s_dpoc, None, None);
+        assert!(has_code(&diags_dpoc, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_dpoc), "FAIL");
+    }
+
+    #[test]
+    fn test_inflected_roots_and_hyperkalemia_regression() {
+        // False positive prevention: hipercalemia vs hipernatremia share only "hiper" (5 chars < 70% of 12 chars)
+        let s_hiper =
+            "Distúrbio hidroeletrolítico é {{c1::hipercalemia::diferenciar de hipernatremia}}.";
+        let diags_hiper = check_hints(s_hiper, None, None);
+        assert!(!has_code(&diags_hiper, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_hiper), "PASS");
+
+        // True positive: hipertensão vs hipertensivo
+        let s_hipertensao =
+            "Classificação da {{c1::hipertensão::estágio pré-hipertensivo}} com MEV.";
+        let diags_hipertensao = check_hints(s_hipertensao, None, None);
+        assert!(has_code(&diags_hipertensao, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_hipertensao), "FAIL");
+
+        // True positive: vasoconstrição vs vasoconstritor
+        let s_vaso = "O efeito da noradrenalina é {{c1::vasoconstrição::agente vasoconstritor}}.";
+        let diags_vaso = check_hints(s_vaso, None, None);
+        assert!(has_code(&diags_vaso, "HINT.ROOT_LEAK"));
+        assert_eq!(worst_severity(&diags_vaso), "FAIL");
     }
 
     #[test]

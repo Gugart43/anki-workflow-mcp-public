@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "ExportStatus": {
+      "description": "Status of the export operation.",
+      "enum": [
+        "EXPORTED",
+        "ALREADY_EXPORTED"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Result of `export_reviewed_files`.",
+  "properties": {
+    "batch_id": {
+      "type": "string"
+    },
+    "cloze_file": {
+      "type": "string"
+    },
+    "qa_file": {
+      "type": "string"
+    },
+    "receipt_hash": {
+      "type": "string"
+    },
+    "root_mirror_written": {
+      "type": "boolean"
+    },
+    "state_file": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ExportStatus"
+    }
+  },
+  "required": [
+    "status",
+    "batch_id",
+    "receipt_hash",
+    "qa_file",
+    "cloze_file",
+    "root_mirror_written",
+    "state_file"
+  ],
+  "title": "ExportReviewedFilesResult",
+  "type": "object"
+}

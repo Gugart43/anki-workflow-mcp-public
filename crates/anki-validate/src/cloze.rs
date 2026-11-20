@@ -38,12 +38,14 @@ static PREFIX_WORDS_RE: LazyLock<Regex> = LazyLock::new(|| {
 static SUFFIX_PUNCT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[,;:\.]\s*$").expect("valid suffix punct regex"));
 
-static NESTED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\{\{c\d+::[^}]*\{\{c\d+").expect("valid nested cloze regex"));
+static CLOZE_OPEN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{\{c\d+::").expect("valid cloze open regex"));
 
-static ID_IN_TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*[\(\[]?(?:ANKI-\d+|B\d+-[A-Z]+-\d+)[\)\]]?").expect("valid id in text regex")
-});
+/// Check whether `text` starts with a card ID prefix (ANKI-xx, Bxx-...).
+#[must_use]
+pub fn has_leading_id_leak(text: &str) -> bool {
+    crate::id_leak::has_leading_id_leak(text)
+}
 
 static EXT_HINT_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\{\{c\d+::[^}]+\}\}\s*\((?:ex|exemplo|ex\.|e\.g\.)\s*:[^)]+\)")
@@ -63,52 +65,84 @@ static POST_ACRONYM_RE: LazyLock<Regex> =
 static TARGET_ACRONYM_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Z0-9]{2,8}$").expect("valid target acronym regex"));
 
-static CLOZE_DEL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\{\{c\d+::.*?\}\}").expect("valid cloze del regex"));
-
-static BR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").expect("valid br regex"));
-
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").expect("valid tag regex"));
-
-static WS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").expect("valid ws regex"));
-
-static ENTITY_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);").expect("valid entity regex"));
-
-fn unescape_html_entities(s: &str) -> String {
-    ENTITY_RE
-        .replace_all(s, |caps: &regex::Captures<'_>| {
-            let ent = &caps[1];
-            if let Some(hex) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
-                if let Some(ch) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
-                    return ch.to_string();
-                }
-            } else if let Some(dec) = ent.strip_prefix('#') {
-                if let Some(ch) = dec.parse::<u32>().ok().and_then(char::from_u32) {
-                    return ch.to_string();
-                }
-            } else {
-                match ent {
-                    "amp" => return "&".to_string(),
-                    "lt" => return "<".to_string(),
-                    "gt" => return ">".to_string(),
-                    "quot" => return "\"".to_string(),
-                    "apos" => return "'".to_string(),
-                    "nbsp" => return "\u{00A0}".to_string(),
-                    "le" => return "≤".to_string(),
-                    "ge" => return "≥".to_string(),
-                    "times" => return "×".to_string(),
-                    "divide" => return "÷".to_string(),
-                    "deg" => return "°".to_string(),
-                    "plusmn" => return "±".to_string(),
-                    "micro" => return "µ".to_string(),
-                    _ => {}
-                }
+/// Resolve UTF-8 byte offsets for a ClozeSpan, handling byte offsets directly
+/// or falling back to char-index mapping if the parser has not yet been migrated.
+fn span_byte_offsets(text: &str, span: &ClozeSpan) -> (usize, usize) {
+    if text.is_char_boundary(span.start)
+        && text.is_char_boundary(span.end)
+        && text[span.start..].starts_with("{{c")
+    {
+        (span.start, span.end)
+    } else {
+        let mut char_idx = 0usize;
+        let mut byte_start = None;
+        let mut byte_end = None;
+        for (b_idx, _) in text.char_indices() {
+            if char_idx == span.start {
+                byte_start = Some(b_idx);
             }
-            caps[0].to_string()
-        })
-        .into_owned()
+            if char_idx == span.end {
+                byte_end = Some(b_idx);
+                break;
+            }
+            char_idx += 1;
+        }
+        if char_idx == span.end && byte_end.is_none() {
+            byte_end = Some(text.len());
+        }
+        let start = byte_start.unwrap_or(span.start);
+        let end = byte_end.unwrap_or(span.end);
+        (start, end)
+    }
+}
+
+/// Check whether `sentence` has nested cloze deletions, verifying `CLOZE_OPEN_RE`
+/// in text between spans, in `span.target`, and in `span.hint`.
+fn has_nested_cloze(sentence: &str, spans: &[ClozeSpan]) -> bool {
+    let mut cursor = 0usize;
+    for span in spans {
+        let (start, end) = span_byte_offsets(sentence, span);
+        if start >= cursor && start <= sentence.len() && sentence.is_char_boundary(start) {
+            let between = &sentence[cursor..start];
+            if CLOZE_OPEN_RE.is_match(between) {
+                return true;
+            }
+        }
+        if CLOZE_OPEN_RE.is_match(&span.target) {
+            return true;
+        }
+        if let Some(ref hint) = span.hint
+            && CLOZE_OPEN_RE.is_match(hint)
+        {
+            return true;
+        }
+        cursor = end.min(sentence.len());
+    }
+    if cursor < sentence.len() && sentence.is_char_boundary(cursor) {
+        let tail = &sentence[cursor..];
+        if CLOZE_OPEN_RE.is_match(tail) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Replace all cloze spans in `sentence` with `"BLANK"`.
+fn replace_spans_with_blank(sentence: &str, spans: &[ClozeSpan]) -> String {
+    let mut out = String::with_capacity(sentence.len());
+    let mut cursor = 0usize;
+    for span in spans {
+        let (start, end) = span_byte_offsets(sentence, span);
+        if start >= cursor && start <= sentence.len() && sentence.is_char_boundary(start) {
+            out.push_str(&sentence[cursor..start]);
+            out.push_str("BLANK");
+            cursor = end.min(sentence.len());
+        }
+    }
+    if cursor < sentence.len() && sentence.is_char_boundary(cursor) {
+        out.push_str(&sentence[cursor..]);
+    }
+    out
 }
 
 /// Unwrap `{{cN::target(::hint)?}}` keeping `target`, preserving nested LaTeX braces.
@@ -117,70 +151,32 @@ pub fn strip_cloze_markers(text: &str) -> String {
     if !text.contains("{{c") {
         return text.to_owned();
     }
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
-    let mut out: Vec<char> = Vec::with_capacity(n);
-    let mut i = 0;
-    while i < n {
-        if i + 6 < n
-            && chars[i] == '{'
-            && chars[i + 1] == '{'
-            && chars[i + 2] == 'c'
-            && chars[i + 3].is_ascii_digit()
-        {
-            let mut j = i + 3;
-            while j < n && chars[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j + 1 < n && chars[j] == ':' && chars[j + 1] == ':' {
-                let content_start = j + 2;
-                let mut k = content_start;
-                let mut brace_depth: usize = 0;
-                let mut sep_pos: Option<usize> = None;
-                let mut closed = false;
-                while k + 1 < n {
-                    if chars[k] == '}' && chars[k + 1] == '}' && brace_depth == 0 {
-                        let target_end = sep_pos.unwrap_or(k);
-                        out.extend_from_slice(&chars[content_start..target_end]);
-                        i = k + 2;
-                        closed = true;
-                        break;
-                    } else if chars[k] == ':'
-                        && chars[k + 1] == ':'
-                        && brace_depth == 0
-                        && sep_pos.is_none()
-                    {
-                        sep_pos = Some(k);
-                        k += 2;
-                        continue;
-                    } else if chars[k] == '{' && (k == 0 || chars[k - 1] != '\\') {
-                        brace_depth += 1;
-                    } else if chars[k] == '}' && (k == 0 || chars[k - 1] != '\\') {
-                        brace_depth = brace_depth.saturating_sub(1);
-                    }
-                    k += 1;
-                }
-                if closed {
-                    continue;
-                }
-            }
-        }
-        out.push(chars[i]);
-        i += 1;
+    let spans = find_cloze_spans(text);
+    if spans.is_empty() {
+        return text.to_owned();
     }
-    out.into_iter().collect()
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for span in &spans {
+        let (start, end) = span_byte_offsets(text, span);
+        if start >= cursor && start <= text.len() && text.is_char_boundary(start) {
+            out.push_str(&text[cursor..start]);
+            out.push_str(&span.target);
+            cursor = end.min(text.len());
+        }
+    }
+    if cursor < text.len() && text.is_char_boundary(cursor) {
+        out.push_str(&text[cursor..]);
+    }
+    out
 }
 
 /// Calculate the visible length of text as seen by the reader
 /// (tags, entities, and cloze syntax stripped; whitespace normalized).
 #[must_use]
 pub fn visible_len(text: &str) -> usize {
-    let s = strip_cloze_markers(text);
-    let s = BR_RE.replace_all(&s, " ");
-    let s = TAG_RE.replace_all(&s, "");
-    let s = unescape_html_entities(&s);
-    let s = WS_RE.replace_all(&s, " ");
-    s.trim().chars().count()
+    let uncloaked = strip_cloze_markers(text);
+    crate::html_text::visible_char_count(&uncloaked)
 }
 
 fn make_cloze_diag(
@@ -227,6 +223,11 @@ pub fn limit_diag(
     } else {
         limit.warn
     };
+    let severity = if value > limit.error {
+        Severity::Critical
+    } else {
+        Severity::Warn
+    };
     let default_suggestion = "Sinal de revisão: preserve o contexto necessário para tornar a resposta única \
         e mova explicação opcional para Notas Adicionais.";
     let msg = format!(
@@ -237,7 +238,7 @@ pub fn limit_diag(
         msg,
         row,
         field,
-        Severity::Warn,
+        severity,
         "anki-card-generator",
         Some(suggestion.unwrap_or(default_suggestion).to_owned()),
     ))
@@ -274,7 +275,7 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
     }
 
     // ── CLOZE.NESTED ─────────────────────────────────────────────────────────
-    if NESTED_RE.is_match(sentence) {
+    if has_nested_cloze(sentence, &spans) {
         diags.push(make_cloze_diag(
             "CLOZE.NESTED",
             "Nested cloze deletions found",
@@ -287,7 +288,7 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
     }
 
     // ── CLOZE.ID_IN_TEXT ─────────────────────────────────────────────────────
-    if ID_IN_TEXT_RE.is_match(sentence) {
+    if has_leading_id_leak(&crate::html_text::html_to_visible_text(sentence)) {
         diags.push(make_cloze_diag(
             "CLOZE.ID_IN_TEXT",
             "Visible card ID found in carrier sentence. IDs must reside in tags or metadata, not in the prompt.",
@@ -326,8 +327,8 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
     }
 
     // ── CLOZE.ACRONYM_LEAK & CLOZE.TOO_LONG ──────────────────────────────────
-    let sentence_chars: Vec<char> = sentence.chars().collect();
     for span in &spans {
+        let (start, end) = span_byte_offsets(sentence, span);
         let target_clean = span.target.trim();
         let target_vis_len = visible_len(target_clean);
         if target_vis_len > 120 {
@@ -350,10 +351,12 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
         }
 
         // Check acronym leak: Target followed by (ACRONYM) where acronym matches target
-        let post: String = sentence_chars[span.end..(span.end + 25).min(sentence_chars.len())]
-            .iter()
-            .collect();
-        let post_trimmed = post.trim();
+        let post = if sentence.is_char_boundary(end) {
+            &sentence[end..]
+        } else {
+            ""
+        };
+        let post_trimmed = post.trim_start();
         if let Some(caps) = POST_ACRONYM_RE.captures(post_trimmed) {
             let sigla = &caps[1];
             if target_clean.split_whitespace().count() >= 2 {
@@ -394,9 +397,12 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
 
         // Check acronym leak: Target is ACRONYM preceded by Full Name (
         if TARGET_ACRONYM_RE.is_match(target_clean) {
-            let start_idx = span.start.saturating_sub(70);
-            let pre: String = sentence_chars[start_idx..span.start].iter().collect();
-            let pre_trimmed = pre.trim();
+            let pre = if sentence.is_char_boundary(start) {
+                &sentence[..start]
+            } else {
+                ""
+            };
+            let pre_trimmed = pre.trim_end();
             if let Some(name_with_trailing) = pre_trimmed.strip_suffix('(') {
                 let name_part = name_with_trailing.trim();
                 let words: Vec<&str> = name_part
@@ -518,7 +524,7 @@ pub fn check_cloze(sentence: &str, row: Option<usize>, field: Option<&str>) -> V
     }
 
     // ── CLOZE.CONTEXT_WARN (heuristic WARN) ──────────────────────────────────
-    let cleaned = CLOZE_DEL_RE.replace_all(sentence, "BLANK");
+    let cleaned = replace_spans_with_blank(sentence, &spans);
     if cleaned.chars().count() < 40 {
         diags.push(make_cloze_diag(
             "CLOZE.CONTEXT_WARN",

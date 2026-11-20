@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,23 +15,9 @@ from anki_mcp.core.tables import escape_cell, markdown_tables_to_html
 ROOT = Path(__file__).resolve().parents[2]
 
 try:
-    from tests.differential.conftest import resolve_rust_binary
+    from tests.differential.conftest import OracleRunner
 except ImportError:
-    from conftest import resolve_rust_binary
-
-_rust_binary = resolve_rust_binary
-
-
-def _oracle(op: str, **kwargs: object) -> dict:
-    result = subprocess.run(
-        [str(_rust_binary()), "oracle"],
-        input=json.dumps([{"op": op, **kwargs}], ensure_ascii=False),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(result.stdout)[0]
+    from conftest import OracleRunner
 
 
 def _diagnostics(items: list) -> dict:
@@ -50,11 +34,11 @@ def _diagnostics(items: list) -> dict:
         ("A::B á-foo", None),
     ],
 )
-def test_tags_parity(text: str, taxonomy: list[str] | None) -> None:
+def test_tags_parity(text: str, taxonomy: list[str] | None, run_oracle: OracleRunner) -> None:
     expected = check_tags(
         text, set(taxonomy) if taxonomy is not None else None, row=3, field="Etiquetas"
     )
-    assert _oracle(
+    assert run_oracle(
         "check_tags", tags_field=text, taxonomy_nodes=taxonomy, row=3, field="Etiquetas"
     ) == _diagnostics(expected)
 
@@ -69,7 +53,9 @@ def test_tags_parity(text: str, taxonomy: list[str] | None) -> None:
         ("xB01-QA-001y B99-CL-999Z", [], []),
     ],
 )
-def test_crossrefs_parity(text: str, active: list[str] | None, current: list[str] | None) -> None:
+def test_crossrefs_parity(
+    text: str, active: list[str] | None, current: list[str] | None, run_oracle: OracleRunner
+) -> None:
     expected = check_crossrefs(
         text,
         set(active) if active is not None else None,
@@ -77,7 +63,7 @@ def test_crossrefs_parity(text: str, active: list[str] | None, current: list[str
         row=5,
         field="Referências",
     )
-    assert _oracle(
+    assert run_oracle(
         "check_crossrefs",
         text=text,
         active_ids=active,
@@ -109,9 +95,9 @@ def test_crossrefs_parity(text: str, active: list[str] | None, current: list[str
         ),
     ],
 )
-def test_images_parity(html: str, catalog: list[str] | None) -> None:
+def test_images_parity(html: str, catalog: list[str] | None, run_oracle: OracleRunner) -> None:
     expected = check_images_field(html, set(catalog) if catalog is not None else None, row=9)
-    assert _oracle(
+    assert run_oracle(
         "check_images_field", html=html, catalog_filenames=catalog, row=9
     ) == _diagnostics(expected)
 
@@ -128,9 +114,9 @@ def test_images_parity(html: str, catalog: list[str] | None) -> None:
         ("<table><tr><td><table><tr><td>x</td></tr></table></td></tr></table>", False),
     ],
 )
-def test_tables_parity(html: str, face: bool) -> None:
+def test_tables_parity(html: str, face: bool, run_oracle: OracleRunner) -> None:
     expected = check_tables_field(html, field="Notas Adicionais", row=2, face=face)
-    assert _oracle(
+    assert run_oracle(
         "check_tables_field", html=html, field="Notas Adicionais", row=2, face=face
     ) == _diagnostics(expected)
 
@@ -145,8 +131,8 @@ def test_tables_parity(html: str, face: bool) -> None:
         "Água < 10 &bogus; &",
     ],
 )
-def test_table_cell_parity(text: str) -> None:
-    assert _oracle("escape_cell", text=text) == {"text": escape_cell(text)}
+def test_table_cell_parity(text: str, run_oracle: OracleRunner) -> None:
+    assert run_oracle("escape_cell", text=text) == {"text": escape_cell(text)}
 
 
 @pytest.mark.parametrize(
@@ -159,6 +145,6 @@ def test_table_cell_parity(text: str) -> None:
         "A|B\n:-|--:\n1|2|3\n",
     ],
 )
-def test_markdown_tables_parity(text: str) -> None:
+def test_markdown_tables_parity(text: str, run_oracle: OracleRunner) -> None:
     result, count = markdown_tables_to_html(text)
-    assert _oracle("markdown_tables_to_html", text=text) == {"text": result, "count": count}
+    assert run_oracle("markdown_tables_to_html", text=text) == {"text": result, "count": count}

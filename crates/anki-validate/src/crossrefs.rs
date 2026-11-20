@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use anki_domain::{Diagnostic, Severity};
+use anki_domain::{CsvRowNumber, Diagnostic, DiagnosticCode, Severity};
 use regex::Regex;
+
+pub const CODE_XREF_BROKEN: DiagnosticCode = DiagnosticCode::from_static("XREF.BROKEN");
 
 static XREF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(B\d{2}-(?:QA|CL)-\d{3}[a-z]?)\b").expect("valid xref regex"));
@@ -20,6 +22,7 @@ pub fn check_crossrefs(
     }
 
     let mut diags = Vec::new();
+    let mut seen_broken: HashSet<&str> = HashSet::new();
 
     for caps in XREF_RE.captures_iter(text) {
         let Some(m) = caps.get(1) else {
@@ -30,9 +33,9 @@ pub fn check_crossrefs(
         let in_active = active_ids.is_some_and(|ids| ids.contains(ref_id));
         let in_current = current_batch_ids.is_some_and(|ids| ids.contains(ref_id));
 
-        if !in_active && !in_current {
+        if !in_active && !in_current && seen_broken.insert(ref_id) {
             let mut diag = Diagnostic::new(
-                anki_domain::DiagnosticCode::from_static("XREF.BROKEN"),
+                CODE_XREF_BROKEN,
                 Severity::Critical,
                 "anki-export-validator",
                 format!(
@@ -44,7 +47,11 @@ pub fn check_crossrefs(
             );
 
             if let Some(r) = row {
-                diag = diag.with_row(r);
+                if let Some(row_num) = CsvRowNumber::new(r) {
+                    diag = diag.with_row(row_num);
+                } else {
+                    diag = diag.with_row(r);
+                }
             }
             if let Some(f) = field {
                 diag = diag.with_field(f);
@@ -84,16 +91,46 @@ mod tests {
     }
 
     #[test]
-    fn broken_and_duplicate_crossrefs_are_reported() {
+    fn broken_crossrefs_are_deduplicated_per_field() {
         let active = HashSet::from(["B01-QA-001".to_string()]);
         let text = "See [B01-QA-999] and again B01-QA-999.";
         let diags = check_crossrefs(text, Some(&active), None, Some(4), Some("Enunciado"));
-        assert_eq!(diags.len(), 2);
-        assert_eq!(diags[0].code, "XREF.BROKEN");
+        assert_eq!(
+            diags.len(),
+            1,
+            "Duplicate broken ref_id in same field must be deduplicated"
+        );
+        assert_eq!(diags[0].code, CODE_XREF_BROKEN);
         assert_eq!(diags[0].severity, Severity::Critical);
         assert_eq!(diags[0].row, Some(4));
         assert_eq!(diags[0].field.as_deref(), Some("Enunciado"));
         assert!(diags[0].suggestion.is_some());
+    }
+
+    #[test]
+    fn distinct_broken_crossrefs_are_both_reported() {
+        let active = HashSet::from(["B01-QA-001".to_string()]);
+        let text = "See [B01-QA-999] and [B02-CL-888] and again B01-QA-999.";
+        let diags = check_crossrefs(text, Some(&active), None, Some(4), Some("Enunciado"));
+        assert_eq!(
+            diags.len(),
+            2,
+            "Distinct broken crossrefs must each be reported once"
+        );
+        let reported_ids: HashSet<_> = diags
+            .iter()
+            .map(|d| {
+                if d.message.contains("B01-QA-999") {
+                    "B01-QA-999"
+                } else if d.message.contains("B02-CL-888") {
+                    "B02-CL-888"
+                } else {
+                    "unknown"
+                }
+            })
+            .collect();
+        assert!(reported_ids.contains("B01-QA-999"));
+        assert!(reported_ids.contains("B02-CL-888"));
     }
 
     #[test]

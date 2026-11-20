@@ -4,6 +4,7 @@
 //! separately. Heuristics cannot certify source fidelity or semantic atomicity.
 use anki_domain::{Diagnostic, NoteType};
 use anki_parser::{count_cloze_indices, find_cloze_spans, iter_data_lines, split_row};
+use schemars::JsonSchema;
 use serde::Serialize;
 
 use crate::cloze::check_cloze;
@@ -14,19 +15,20 @@ use crate::notes::{check_notes, visible_char_count};
 use crate::qa::{check_qa, extract_candidate_items};
 
 fn visible_context_for_index(sentence: &str, index: usize) -> String {
-    let chars: Vec<char> = sentence.chars().collect();
-    let mut context = String::new();
-    let mut cursor = 0;
+    let mut context = String::with_capacity(sentence.len());
+    let mut cursor = 0usize;
     for span in find_cloze_spans(sentence) {
         if span.start < cursor {
             continue;
         }
-        context.extend(&chars[cursor..span.start]);
+        if span.start > cursor {
+            context.push_str(&sentence[cursor..span.start]);
+        }
         if span.index == index {
-            match span.hint {
+            match &span.hint {
                 Some(hint) if !hint.is_empty() => {
                     context.push('[');
-                    context.push_str(&hint);
+                    context.push_str(hint);
                     context.push(']');
                 }
                 _ => context.push_str("[...]"),
@@ -36,11 +38,13 @@ fn visible_context_for_index(sentence: &str, index: usize) -> String {
         }
         cursor = span.end;
     }
-    context.extend(&chars[cursor..]);
+    if cursor < sentence.len() {
+        context.push_str(&sentence[cursor..]);
+    }
     context
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct CardInformationReview {
     pub note_type: &'static str,
     pub source_row: usize,
@@ -61,12 +65,11 @@ pub struct CardInformationReview {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct BatchInformationReview {
     pub qa_cards: usize,
     pub cloze_cards: usize,
     pub total_cards: usize,
-    pub batch_size_limit: Option<usize>,
     pub semantic_review_required: bool,
     pub diagnostics: Vec<Diagnostic>,
     pub cards: Vec<CardInformationReview>,
@@ -90,6 +93,18 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
         issues.extend(check_notes(notes, answer, Some(row)));
         let candidate_items = extract_candidate_items(answer);
         let candidate_item_count = candidate_items.len();
+        if candidate_item_count >= 3 {
+            issues.push(
+                Diagnostic::new(
+                    anki_domain::DiagnosticCode::from_static("INFO.QA_HIDDEN_LIST"),
+                    anki_domain::Severity::Warn,
+                    "anki-qa-designer",
+                    format!("Answer hides {candidate_item_count} candidate items; review semantic independence"),
+                )
+                .with_row(row)
+                .with_field("Resposta"),
+            );
+        }
         cards.push(CardInformationReview {
             note_type: "QA",
             source_row: row,
@@ -216,7 +231,6 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
         qa_cards,
         cloze_cards,
         total_cards: cards.len(),
-        batch_size_limit: None,
         semantic_review_required: true,
         diagnostics,
         cards,
@@ -245,5 +259,52 @@ mod tests {
         assert_eq!(result.total_cards, 1);
         assert!(!result.diagnostics.is_empty());
         assert_eq!(result.cards[0].source_row, 2);
+    }
+
+    #[test]
+    fn qa_hidden_list_warning_emitted_for_three_or_more_items() {
+        let qa = format!(
+            "{}\nQual a tríade clínica?|febre; icterícia; dor em HCD|Geral||||",
+            anki_domain::QA_HEADER_CANONICAL
+        );
+        let result = review_batch_information(&qa, anki_domain::CLOZE_HEADER_CANONICAL);
+        assert_eq!(result.qa_cards, 1);
+        let card = &result.cards[0];
+        assert_eq!(card.candidate_item_count, 3);
+        assert!(card.hidden_list_signal);
+        let hidden_diag = card
+            .diagnostics
+            .iter()
+            .find(|d| d.code.as_str() == "INFO.QA_HIDDEN_LIST");
+        assert!(
+            hidden_diag.is_some(),
+            "Expected INFO.QA_HIDDEN_LIST in card diagnostics"
+        );
+        let d = hidden_diag.unwrap();
+        assert_eq!(d.severity, anki_domain::Severity::Warn);
+        assert_eq!(d.field.as_deref(), Some("Resposta"));
+        assert_eq!(d.owner_skill, "anki-qa-designer");
+    }
+
+    #[test]
+    fn visible_context_utf8_accents_and_emoji() {
+        let sentence = "Atenção 🩺: {{c1::ação}} e {{c2::reação::pista}} fim 🎉.";
+        let ctx1 = visible_context_for_index(sentence, 1);
+        assert_eq!(ctx1, "Atenção 🩺: [...] e reação fim 🎉.");
+
+        let ctx2 = visible_context_for_index(sentence, 2);
+        assert_eq!(ctx2, "Atenção 🩺: ação e [pista] fim 🎉.");
+    }
+
+    #[test]
+    fn batch_and_card_information_json_schema() {
+        let schema_batch = schemars::schema_for!(BatchInformationReview);
+        let json_batch = serde_json::to_string(&schema_batch).expect("schema serialize");
+        assert!(json_batch.contains("BatchInformationReview"));
+        assert!(!json_batch.contains("batch_size_limit"));
+
+        let schema_card = schemars::schema_for!(CardInformationReview);
+        let json_card = serde_json::to_string(&schema_card).expect("schema serialize");
+        assert!(json_card.contains("CardInformationReview"));
     }
 }

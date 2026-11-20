@@ -112,37 +112,46 @@ pub struct ClozeSpan {
     pub index: usize,
     pub target: String,
     pub hint: Option<String>,
-    /// Start char index in the sentence.
+    /// Start UTF-8 byte offset in the sentence.
     pub start: usize,
-    /// End char index (exclusive) in the sentence.
+    /// End UTF-8 byte offset (exclusive) in the sentence.
     pub end: usize,
+}
+
+fn is_escaped(bytes: &[u8], pos: usize) -> bool {
+    let mut backslashes = 0usize;
+    let mut idx = pos;
+    while idx > 0 && bytes[idx - 1] == b'\\' {
+        backslashes += 1;
+        idx -= 1;
+    }
+    backslashes % 2 == 1
 }
 
 /// Extract Cloze spans supporting nested LaTeX braces `{a}/{b}`, matching
 /// `checks/cloze.py::_find_cloze_spans`.
 #[must_use]
 pub fn find_cloze_spans(sentence: &str) -> Vec<ClozeSpan> {
-    let chars: Vec<char> = sentence.chars().collect();
-    let n = chars.len();
+    let bytes = sentence.as_bytes();
+    let n = bytes.len();
     let mut results = Vec::new();
     let mut i = 0;
 
     while i + 6 < n {
-        if chars[i] == '{'
-            && chars[i + 1] == '{'
-            && chars[i + 2] == 'c'
-            && chars[i + 3].is_ascii_digit()
+        if bytes[i] == b'{'
+            && bytes[i + 1] == b'{'
+            && bytes[i + 2] == b'c'
+            && bytes[i + 3].is_ascii_digit()
         {
             let mut j = i + 3;
-            while j < n && chars[j].is_ascii_digit() {
+            while j < n && bytes[j].is_ascii_digit() {
                 j += 1;
             }
-            if j + 1 >= n || chars[j] != ':' || chars[j + 1] != ':' {
+            if j + 1 >= n || bytes[j] != b':' || bytes[j + 1] != b':' {
                 i += 1;
                 continue;
             }
-            let idx_str: String = chars[i + 3..j].iter().collect();
-            let Ok(idx) = idx_str.parse::<usize>() else {
+            let Ok(idx) = sentence[i + 3..j].parse::<usize>() else {
                 i += 1;
                 continue;
             };
@@ -154,14 +163,18 @@ pub fn find_cloze_spans(sentence: &str) -> Vec<ClozeSpan> {
             let mut closed = false;
 
             while k + 1 < n {
-                if chars[k] == '}' && chars[k + 1] == '}' && brace_depth == 0 {
+                if bytes[k] == b'}'
+                    && bytes[k + 1] == b'}'
+                    && brace_depth == 0
+                    && !is_escaped(bytes, k)
+                {
                     let (target, hint) = if let Some(sep) = sep_pos {
                         (
-                            chars[content_start..sep].iter().collect(),
-                            Some(chars[sep + 2..k].iter().collect()),
+                            sentence[content_start..sep].to_owned(),
+                            Some(sentence[sep + 2..k].to_owned()),
                         )
                     } else {
-                        (chars[content_start..k].iter().collect(), None)
+                        (sentence[content_start..k].to_owned(), None)
                     };
                     results.push(ClozeSpan {
                         index: idx,
@@ -173,17 +186,17 @@ pub fn find_cloze_spans(sentence: &str) -> Vec<ClozeSpan> {
                     i = k + 2;
                     closed = true;
                     break;
-                } else if chars[k] == ':'
-                    && chars[k + 1] == ':'
+                } else if bytes[k] == b':'
+                    && bytes[k + 1] == b':'
                     && brace_depth == 0
                     && sep_pos.is_none()
                 {
                     sep_pos = Some(k);
                     k += 2;
                     continue;
-                } else if chars[k] == '{' && (k == 0 || chars[k - 1] != '\\') {
+                } else if bytes[k] == b'{' && !is_escaped(bytes, k) {
                     brace_depth += 1;
-                } else if chars[k] == '}' && (k == 0 || chars[k - 1] != '\\') {
+                } else if bytes[k] == b'}' && !is_escaped(bytes, k) {
                     brace_depth = brace_depth.saturating_sub(1);
                 }
                 k += 1;
@@ -415,5 +428,58 @@ mod tests {
         assert_eq!(*row2, 4);
         assert_eq!(row2, &4);
         assert_eq!(*line2, "Q3|R3|Neuro||||");
+    }
+
+    #[test]
+    fn cloze_spans_byte_offsets_with_accents_and_emoji() {
+        let text = "Coração 🩺: {{c1::ação}} e {{c2::reação::pista}} fim 🎉.";
+        let spans = find_cloze_spans(text);
+        assert_eq!(spans.len(), 2);
+
+        // Verify span 0: byte offsets allow exact UTF-8 string slicing without panic
+        let s0 = &spans[0];
+        assert_eq!(s0.index, 1);
+        assert_eq!(s0.target, "ação");
+        assert_eq!(s0.hint, None);
+        assert_eq!(&text[s0.start..s0.end], "{{c1::ação}}");
+        assert_eq!(&text[..s0.start], "Coração 🩺: ");
+
+        // Verify span 1
+        let s1 = &spans[1];
+        assert_eq!(s1.index, 2);
+        assert_eq!(s1.target, "reação");
+        assert_eq!(s1.hint.as_deref(), Some("pista"));
+        assert_eq!(&text[s1.start..s1.end], "{{c2::reação::pista}}");
+        assert_eq!(&text[s0.end..s1.start], " e ");
+        assert_eq!(&text[s1.end..], " fim 🎉.");
+    }
+
+    #[test]
+    fn cloze_spans_parity_aware_backslash_escapes() {
+        // 1. Literal escaped brace \{ does not change depth:
+        //    In LaTeX, \left\{ and \right\} are common
+        let s_escaped_brace = r"Fórmula: {{c1::\left\{ x \mid x > 0 \right\}::conjunto}} ok";
+        let spans = find_cloze_spans(s_escaped_brace);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].target, r"\left\{ x \mid x > 0 \right\}");
+        assert_eq!(spans[0].hint.as_deref(), Some("conjunto"));
+
+        // 2. Escaped backslash \\ before { DOES change depth (even backslashes = unescaped brace):
+        let s_even_bs = r"Exemplo: {{c1::linha1 \\ {bloco} \\ fim::dica}} ok";
+        let spans_even = find_cloze_spans(s_even_bs);
+        assert_eq!(spans_even.len(), 1);
+        assert_eq!(spans_even[0].target, r"linha1 \\ {bloco} \\ fim");
+
+        // 3. Escaped closing brace \} does not close cloze; even backslashes \\}} does close cloze:
+        let s_escaped_close = r"Teste {{c1::algo \} com chaves::dica}} fim";
+        let spans_close = find_cloze_spans(s_escaped_close);
+        assert_eq!(spans_close.len(), 1);
+        assert_eq!(spans_close[0].target, r"algo \} com chaves");
+
+        // 4. Parity helper direct verification
+        assert!(is_escaped(b"\\", 1));
+        assert!(!is_escaped(b"\\\\", 2));
+        assert!(is_escaped(b"\\\\\\", 3));
+        assert!(!is_escaped(b"\\\\\\\\", 4));
     }
 }

@@ -9,6 +9,7 @@ fn main() {
     println!("cargo:rustc-env=ANKI_BUILD_TARGET={target}");
 
     // 2. Track source files and build script without invalidating on target/cache
+    println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../../crates/anki-domain/src");
@@ -242,11 +243,17 @@ fn paths_match(p1: &Path, p2: &Path) -> bool {
     normalize_path(&c1) == normalize_path(&c2)
 }
 
+#[cfg(windows)]
 fn normalize_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     let s_ref: &str = &s;
     let stripped = s_ref.strip_prefix(r"\\?\").unwrap_or(s_ref);
     PathBuf::from(stripped.replace('/', "\\").to_lowercase())
+}
+
+#[cfg(not(windows))]
+fn normalize_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 fn is_valid_hex_sha(s: &str) -> bool {

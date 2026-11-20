@@ -40,6 +40,7 @@ impl Default for StringOrVec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct RawTableSpec {
     #[serde(default)]
     pub caption: String,
@@ -64,6 +65,7 @@ fn default_item_type() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct RawMediaFigure {
     pub filename: String,
     #[serde(default)]
@@ -106,6 +108,7 @@ impl OneOrManyFigures {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RawNoteSource {
     pub fonte: String,
     pub trecho: String,
@@ -127,12 +130,14 @@ impl RawNoteSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RawFlowNode {
     pub id: String,
     pub texto: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RawFlowEdge {
     pub origem: String,
     pub destino: String,
@@ -140,6 +145,7 @@ pub struct RawFlowEdge {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RawNoteFlow {
     pub inicio: String,
     pub nos: Vec<RawFlowNode>,
@@ -455,56 +461,91 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RawCardDraft {
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(alias = "note_type")]
-    pub tipo: CardTipo,
-    #[serde(alias = "pergunta", alias = "sentenca", alias = "enunciado")]
-    pub enunciado_ou_sentenca: String,
-    #[serde(default)]
-    pub resposta: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_null_default",
-        alias = "campo_de_estudo",
-        alias = "campo",
-        alias = "area",
-        alias = "study_field",
-        alias = "field_of_study",
-        alias = "especialidade"
-    )]
-    pub campo_estudo: String,
-    #[serde(default, alias = "notas")]
-    pub notas_adicionais: RawExtraNotesInput,
-    #[serde(default)]
-    pub tabela_notas: Option<RawTableSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tabelas_notas: Option<Vec<RawTableSpec>>,
-    #[serde(default)]
-    pub figura: Option<RawMediaFigure>,
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    pub figuras: Vec<RawMediaFigure>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub figuras_notas: Option<OneOrManyFigures>,
-    #[serde(
-        default,
-        deserialize_with = "deserialize_null_default",
-        alias = "fonte"
-    )]
-    pub referencias: StringOrVec,
-    #[serde(default, deserialize_with = "deserialize_null_default", alias = "tags")]
-    pub etiquetas: StringOrVec,
-    #[serde(default, skip_serializing)]
-    #[schemars(skip)]
-    pub images: Option<Value>,
-    #[serde(default, skip_serializing)]
-    #[schemars(skip)]
-    pub imagens_relacionadas: Option<Value>,
-    #[serde(default, skip_serializing)]
-    #[schemars(skip)]
-    pub imagens: Option<Value>,
+macro_rules! define_raw_card_draft {
+    ($(#[$meta:meta])* $vis:vis struct $name:ident) => {
+        #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+        $(#[$meta])*
+        $vis struct $name {
+            #[serde(default)]
+            pub id: Option<String>,
+            #[serde(alias = "note_type")]
+            pub tipo: CardTipo,
+            #[serde(alias = "pergunta", alias = "sentenca", alias = "enunciado")]
+            pub enunciado_ou_sentenca: String,
+            #[serde(default)]
+            pub resposta: Option<String>,
+            #[serde(
+                default,
+                deserialize_with = "deserialize_null_default",
+                alias = "campo_de_estudo",
+                alias = "campo",
+                alias = "area",
+                alias = "study_field",
+                alias = "field_of_study",
+                alias = "especialidade"
+            )]
+            pub campo_estudo: String,
+            #[serde(default, alias = "notas")]
+            pub notas_adicionais: RawExtraNotesInput,
+            #[serde(default)]
+            pub tabela_notas: Option<RawTableSpec>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub tabelas_notas: Option<Vec<RawTableSpec>>,
+            #[serde(default)]
+            pub figura: Option<RawMediaFigure>,
+            #[serde(default, deserialize_with = "deserialize_null_default")]
+            pub figuras: Vec<RawMediaFigure>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub figuras_notas: Option<OneOrManyFigures>,
+            #[serde(
+                default,
+                deserialize_with = "deserialize_null_default",
+                alias = "fonte"
+            )]
+            pub referencias: StringOrVec,
+            #[serde(default, deserialize_with = "deserialize_null_default", alias = "tags")]
+            pub etiquetas: StringOrVec,
+            #[serde(default, skip_serializing)]
+            #[schemars(skip)]
+            pub images: Option<Value>,
+            #[serde(default, skip_serializing)]
+            #[schemars(skip)]
+            pub imagens_relacionadas: Option<Value>,
+            #[serde(default, skip_serializing)]
+            #[schemars(skip)]
+            pub imagens: Option<Value>,
+        }
+    };
+}
+
+define_raw_card_draft!(pub struct RawCardDraft);
+
+define_raw_card_draft!(
+    #[serde(deny_unknown_fields)]
+    pub struct StrictRawCardDraft
+);
+
+impl From<StrictRawCardDraft> for RawCardDraft {
+    fn from(strict: StrictRawCardDraft) -> Self {
+        Self {
+            id: strict.id,
+            tipo: strict.tipo,
+            enunciado_ou_sentenca: strict.enunciado_ou_sentenca,
+            resposta: strict.resposta,
+            campo_estudo: strict.campo_estudo,
+            notas_adicionais: strict.notas_adicionais,
+            tabela_notas: strict.tabela_notas,
+            tabelas_notas: strict.tabelas_notas,
+            figura: strict.figura,
+            figuras: strict.figuras,
+            figuras_notas: strict.figuras_notas,
+            referencias: strict.referencias,
+            etiquetas: strict.etiquetas,
+            images: strict.images,
+            imagens_relacionadas: strict.imagens_relacionadas,
+            imagens: strict.imagens,
+        }
+    }
 }
 
 impl RawCardDraft {
@@ -560,6 +601,16 @@ pub fn normalize_draft(input: &Value) -> Result<Value, String> {
     }
     let raw: RawCardDraft = serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
     let normalized = raw.normalize()?;
+    serde_json::to_value(normalized).map_err(|e| e.to_string())
+}
+
+pub fn normalize_draft_strict(input: &Value) -> Result<Value, String> {
+    if !input.is_object() {
+        return Err("CardDraft input must be a JSON object".to_string());
+    }
+    let raw: StrictRawCardDraft =
+        serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+    let normalized = RawCardDraft::from(raw).normalize()?;
     serde_json::to_value(normalized).map_err(|e| e.to_string())
 }
 
@@ -657,5 +708,37 @@ mod tests {
         });
         let err2 = normalize_draft(&bad_tipo2).unwrap_err();
         assert!(err2.contains("Unsupported draft tipo"));
+    }
+
+    #[test]
+    fn strict_rejects_unknown_fields_while_accepting_known_aliases() {
+        let with_unknown = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta?",
+            "resposta": "Resposta.",
+            "unknown_extra_key": 123
+        });
+        let err = normalize_draft_strict(&with_unknown)
+            .expect_err("strict draft must reject unknown_extra_key");
+        assert!(err.contains("unknown field `unknown_extra_key`"));
+
+        let with_aliases = json!({
+            "note_type": "cl",
+            "sentenca": "A {{c1::heparina}} ativa a antitrombina.",
+            "notas": "Resumo",
+            "fonte": ["Diretriz 2024"],
+            "tags": ["hemato"],
+            "especialidade": "Hematologia"
+        });
+        let out = normalize_draft_strict(&with_aliases).expect("known aliases must pass strict");
+        assert_eq!(out["tipo"], json!("CLOZE"));
+        assert_eq!(out["campo_estudo"], json!("Hematologia"));
+    }
+
+    #[test]
+    fn strict_rejects_non_object() {
+        let non_object = json!(["not", "an", "object"]);
+        let err = normalize_draft_strict(&non_object).expect_err("must reject non-object");
+        assert_eq!(err, "CardDraft input must be a JSON object");
     }
 }

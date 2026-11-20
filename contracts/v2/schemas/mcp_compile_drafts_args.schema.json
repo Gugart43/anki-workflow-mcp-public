@@ -1,0 +1,949 @@
+{
+  "$defs": {
+    "CalloutKind": {
+      "description": "Variante semântica de um bloco de destaque (`Callout`).",
+      "enum": [
+        "trap",
+        "pearl",
+        "diff"
+      ],
+      "type": "string"
+    },
+    "CardTipo": {
+      "enum": [
+        "QA",
+        "CLOZE"
+      ],
+      "type": "string"
+    },
+    "FlowEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "destino": {
+          "type": "string"
+        },
+        "origem": {
+          "type": "string"
+        },
+        "rotulo": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origem",
+        "destino",
+        "rotulo"
+      ],
+      "type": "object"
+    },
+    "FlowNode": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "texto": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "texto"
+      ],
+      "type": "object"
+    },
+    "KeyValueItem": {
+      "additionalProperties": false,
+      "description": "Par chave/valor exibido em blocos `NoteBlock::ChaveValor`.",
+      "properties": {
+        "chave": {
+          "type": "string"
+        },
+        "valor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chave",
+        "valor"
+      ],
+      "type": "object"
+    },
+    "MediaFigure": {
+      "additionalProperties": false,
+      "properties": {
+        "caption": {
+          "default": "",
+          "type": "string"
+        },
+        "caption_style": {
+          "default": "",
+          "type": "string"
+        },
+        "context_link": {
+          "default": "",
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "item_type": {
+          "default": "figure",
+          "type": "string"
+        },
+        "style": {
+          "default": "",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "type": "object"
+    },
+    "NoteBlock": {
+      "description": "Bloco tipado de conteúdo que compõe um `NoteDocument`.\nEstados inválidos tornam-se irrepresentáveis em tempo de desserialização.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "texto": {
+              "type": "string"
+            },
+            "tipo": {
+              "const": "paragrafo",
+              "type": "string"
+            },
+            "titulo": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tipo",
+            "texto"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pares": {
+              "items": {
+                "$ref": "#/$defs/KeyValueItem"
+              },
+              "type": "array"
+            },
+            "tipo": {
+              "const": "chave_valor",
+              "type": "string"
+            },
+            "titulo": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tipo",
+            "pares"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "rotulo": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "texto": {
+              "type": "string"
+            },
+            "tipo": {
+              "const": "callout",
+              "type": "string"
+            },
+            "variante": {
+              "$ref": "#/$defs/CalloutKind"
+            }
+          },
+          "required": [
+            "tipo",
+            "variante",
+            "texto"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "itens": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "ordenada": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tipo": {
+              "const": "lista",
+              "type": "string"
+            },
+            "titulo": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tipo",
+            "itens"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "spec": {
+              "$ref": "#/$defs/TableSpec"
+            },
+            "tipo": {
+              "const": "tabela",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tipo",
+            "spec"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fluxo": {
+              "$ref": "#/$defs/RawFlow"
+            },
+            "tipo": {
+              "const": "fluxograma",
+              "type": "string"
+            },
+            "titulo": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "tipo",
+            "fluxo"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colapsavel": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "figura": {
+              "$ref": "#/$defs/MediaFigure"
+            },
+            "tipo": {
+              "const": "figura",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tipo",
+            "figura"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NoteBlockKind": {
+      "enum": [
+        "paragrafo",
+        "lista",
+        "alerta",
+        "tabela",
+        "fluxograma"
+      ],
+      "type": "string"
+    },
+    "NoteDocument": {
+      "additionalProperties": false,
+      "description": "Documento estruturado de nota composto por blocos tipados e fontes deduplicáveis.",
+      "properties": {
+        "blocos": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoteBlock"
+          },
+          "type": "array"
+        },
+        "fontes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoteSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NoteSource": {
+      "additionalProperties": false,
+      "description": "Fonte bibliográfica ou de referência associada ao documento de nota.",
+      "properties": {
+        "localizacao": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceLocation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "titulo": {
+          "type": "string"
+        },
+        "trecho": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "titulo"
+      ],
+      "type": "object"
+    },
+    "OneOrManyFigures": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RawMediaFigure"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/RawMediaFigure"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "RawExtraNotes": {
+      "additionalProperties": false,
+      "properties": {
+        "armadilhas_diferenciais": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blocos": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RawNoteBlock"
+          },
+          "type": "array"
+        },
+        "correlacao_visual": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fisiopatologia": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raciocinio_clinico": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tabela": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawTableSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "texto_livre": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RawExtraNotesInput": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/NoteDocument"
+        },
+        {
+          "$ref": "#/$defs/RawExtraNotes"
+        }
+      ]
+    },
+    "RawFlow": {
+      "additionalProperties": false,
+      "properties": {
+        "arestas": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FlowEdge"
+          },
+          "type": "array"
+        },
+        "inicio": {
+          "type": "string"
+        },
+        "nos": {
+          "items": {
+            "$ref": "#/$defs/FlowNode"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "inicio",
+        "nos"
+      ],
+      "type": "object"
+    },
+    "RawFlowEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "destino": {
+          "type": "string"
+        },
+        "origem": {
+          "type": "string"
+        },
+        "rotulo": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "origem",
+        "destino",
+        "rotulo"
+      ],
+      "type": "object"
+    },
+    "RawFlowNode": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "texto": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "texto"
+      ],
+      "type": "object"
+    },
+    "RawMediaFigure": {
+      "additionalProperties": false,
+      "properties": {
+        "caption": {
+          "default": "",
+          "type": "string"
+        },
+        "caption_style": {
+          "default": "",
+          "type": "string"
+        },
+        "context_link": {
+          "default": "",
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "item_type": {
+          "default": "figure",
+          "type": "string"
+        },
+        "style": {
+          "default": "",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "type": "object"
+    },
+    "RawNoteBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "fluxograma": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawNoteFlow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "fontes": {
+          "items": {
+            "$ref": "#/$defs/RawNoteSource"
+          },
+          "type": "array"
+        },
+        "itens": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tabela": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawTableSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "texto": {
+          "default": "",
+          "type": "string"
+        },
+        "tipo": {
+          "$ref": "#/$defs/NoteBlockKind"
+        },
+        "titulo": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tipo",
+        "fontes"
+      ],
+      "type": "object"
+    },
+    "RawNoteFlow": {
+      "additionalProperties": false,
+      "properties": {
+        "arestas": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RawFlowEdge"
+          },
+          "type": "array"
+        },
+        "inicio": {
+          "type": "string"
+        },
+        "nos": {
+          "items": {
+            "$ref": "#/$defs/RawFlowNode"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "inicio",
+        "nos"
+      ],
+      "type": "object"
+    },
+    "RawNoteSource": {
+      "additionalProperties": false,
+      "properties": {
+        "fonte": {
+          "type": "string"
+        },
+        "pagina": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "trecho": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "fonte",
+        "trecho",
+        "pagina"
+      ],
+      "type": "object"
+    },
+    "RawTableSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "caption": {
+          "default": "",
+          "type": "string"
+        },
+        "headers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "headers",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "SourceLocation": {
+      "description": "Localização estruturada dentro de uma fonte bibliográfica ou de mídia.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "formato": {
+              "const": "pdf",
+              "type": "string"
+            },
+            "pagina": {
+              "format": "uint64",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "formato",
+            "pagina"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "formato": {
+              "const": "secao",
+              "type": "string"
+            },
+            "referencia": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "formato",
+            "referencia"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "formato": {
+              "const": "url",
+              "type": "string"
+            },
+            "href": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "formato",
+            "href"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "formato": {
+              "const": "timestamp",
+              "type": "string"
+            },
+            "marca": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "formato",
+            "marca"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "StrictRawCardDraft": {
+      "additionalProperties": false,
+      "properties": {
+        "campo_estudo": {
+          "default": "",
+          "type": "string"
+        },
+        "enunciado_ou_sentenca": {
+          "type": "string"
+        },
+        "etiquetas": {
+          "$ref": "#/$defs/StringOrVec",
+          "default": []
+        },
+        "figura": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawMediaFigure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "figuras": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/RawMediaFigure"
+          },
+          "type": "array"
+        },
+        "figuras_notas": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OneOrManyFigures"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notas_adicionais": {
+          "$ref": "#/$defs/RawExtraNotesInput",
+          "default": {
+            "armadilhas_diferenciais": null,
+            "blocos": [],
+            "correlacao_visual": null,
+            "fisiopatologia": null,
+            "raciocinio_clinico": null,
+            "tabela": null,
+            "texto_livre": null
+          }
+        },
+        "referencias": {
+          "$ref": "#/$defs/StringOrVec",
+          "default": []
+        },
+        "resposta": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tabela_notas": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawTableSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tabelas_notas": {
+          "items": {
+            "$ref": "#/$defs/RawTableSpec"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tipo": {
+          "$ref": "#/$defs/CardTipo"
+        }
+      },
+      "required": [
+        "tipo",
+        "enunciado_ou_sentenca"
+      ],
+      "type": "object"
+    },
+    "StringOrVec": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "TableSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "caption": {
+          "default": "",
+          "type": "string"
+        },
+        "headers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "headers",
+        "rows"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "auto_purge_id_leaks": {
+      "default": true,
+      "type": "boolean"
+    },
+    "auto_renumber_cloze": {
+      "default": true,
+      "type": "boolean"
+    },
+    "default_campo_estudo": {
+      "default": "",
+      "type": "string"
+    },
+    "drafts": {
+      "description": "List of card draft objects (QA or Cloze) to normalize and compile.",
+      "items": {
+        "$ref": "#/$defs/StrictRawCardDraft"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "drafts"
+  ],
+  "title": "CompileDraftsArgs",
+  "type": "object"
+}

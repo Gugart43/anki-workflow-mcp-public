@@ -15,9 +15,8 @@ use anki_domain::{Diagnostic, Severity};
 use regex::Regex;
 use std::sync::LazyLock;
 
-static ID_IN_TEXT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*[\(\[]?(?:ANKI-\d+|B\d+-[A-Z]+-\d+)[\)\]]?").expect("valid id in text regex")
-});
+pub use crate::cloze::{strip_cloze_markers, visible_len};
+pub use crate::html_text::{html_to_visible_text, parse_html_text};
 
 static YESNO_ANSWER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^\s*(sim|não|yes|no|verdadeiro|falso|correto|incorreto)\s*$")
@@ -32,13 +31,15 @@ static YESNO_STEM_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static MC_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?is)[(\[]\s*[a-d]\s*[)\]]|\ba\s*\)\s*\S+.{0,40}\bb\s*\)")
-        .expect("valid mc embed regex")
+    Regex::new(
+        r"(?is)(?:(?:\A|[\s;:])\(\s*a\s*\).+?(?:\A|[\s;:])\(\s*b\s*\)|(?:\A|[\s;:])\[\s*a\s*\].+?(?:\A|[\s;:])\[\s*b\s*\]|(?:\A|[\s;:])a\s*\).+?(?:\A|[\s;:])b\s*\))",
+    )
+    .expect("valid mc embed regex")
 });
 
 static CONTEXT_MARKERS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\b(paciente|patient|segundo|conforme|diretriz|guideline|critério|criteria|portador|com\s+(diagnóstico|suspeita)|população|adulto|criança|pediátrico|gestante|idoso|IRC|DRC|ICC|ELA|EM|AVC|SNC)\b",
+        r"(?i)\b(paciente|patient|segundo|conforme|diretriz|guideline|critério|criteria|portador|com\s+(?:diagnóstico|suspeita)|população|adulto|criança|pediátrico|gestante|idoso)\b|\b(?-i:IRC|DRC|ICC|ELA|EM|AVC|SNC)\b",
     )
     .expect("valid context regex")
 });
@@ -68,14 +69,6 @@ static COORDINATED_Q_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid coordinated question regex")
 });
 
-static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").expect("valid tag regex"));
-
-static BR_TAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>").expect("valid br tag regex"));
-
-static WHITESPACE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("valid whitespace regex"));
-
 static APPOSITIVE_AFTER_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)^(?:caracterizad[oa]s?|definid[oa]s?|conhecid[oa]s?|denominad[oa]s?|chamad[oa]s?|ou\s+seja|isto\s+[ée]|i\.e\.|e\.g\.|p\.ex\.|como\s+tamb[ée]m|bem\s+como|assim\s+como|manifestando-se|apresentando-se|cursando\s+com|podendo|que\s+|o\s+qual|a\s+qual|os\s+quais|as\s+quais|cuj[oa]s?|onde|na\s+qual|no\s+qual|com\s+(?:incapacidade|aus[êe]ncia|presen[çc]a|dura[çc][ãa]o|predom[íi]nio|exce[çc][ãa]o|risco|desvio|melhora|piora)|sem\s+|principalmente|especialmente|sobretudo|geralmente|tipicamente|frequentemente|habitualmente|usualmente|em\s+geral|em\s+especial|ap[óo]s|devido\s+a|associad[oa]s?\s+a|secund[áa]ri[oa]s?\s+a|pois\s+|porque\s+|visto\s+que|embora\s+|por[ée]m\b|contudo\b|entretanto\b|todavia\b|mas\b|incluindo\b|exceto\b|salvo\b|inclusive\b|segundo\b|conforme\b)\b",
@@ -103,265 +96,6 @@ static TRAILING_CONJUNCTION_RE: LazyLock<Regex> = LazyLock::new(|| {
 static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:[•\-–—*]|\(\d+\)|\d+\))\s*").expect("valid leading marker regex")
 });
-
-/// Decode common HTML entity name or numeric token.
-fn decode_entity_token(token: &str) -> Option<char> {
-    if let Some(rest) = token.strip_prefix('#') {
-        if let Some(hex) = rest.strip_prefix('x').or_else(|| rest.strip_prefix('X')) {
-            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-        } else {
-            rest.parse::<u32>().ok().and_then(char::from_u32)
-        }
-    } else {
-        match token {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some(' '),
-            "ge" => Some('≥'),
-            "le" => Some('≤'),
-            "bull" => Some('•'),
-            "deg" => Some('°'),
-            "plusmn" => Some('±'),
-            "times" => Some('×'),
-            "divide" => Some('÷'),
-            "micro" => Some('µ'),
-            _ => None,
-        }
-    }
-}
-
-/// Decode HTML character and entity references in text.
-#[must_use]
-pub fn decode_html_entities(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut i = 0;
-    let bytes = input.as_bytes();
-    let n = bytes.len();
-
-    while i < n {
-        if bytes[i] == b'&'
-            && let Some(semi_pos) = bytes[i + 1..].iter().position(|&b| b == b';')
-        {
-            let entity = &input[i + 1..i + 1 + semi_pos];
-            if let Some(c) = decode_entity_token(entity) {
-                out.push(c);
-                i += 2 + semi_pos;
-                continue;
-            }
-        }
-        let ch = input[i..].chars().next().expect("valid utf8");
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
-
-fn is_block_break_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "br" | "hr"
-            | "p"
-            | "div"
-            | "li"
-            | "tr"
-            | "blockquote"
-            | "h1"
-            | "h2"
-            | "h3"
-            | "h4"
-            | "h5"
-            | "h6"
-            | "ul"
-            | "ol"
-    )
-}
-
-/// Parse HTML text preserving block-level line breaks and decoding entities.
-#[must_use]
-pub fn parse_html_text(raw: &str) -> (String, usize, usize) {
-    if raw.is_empty() {
-        return (String::new(), 0, 0);
-    }
-    let mut chunks = String::with_capacity(raw.len());
-    let mut li_count = 0usize;
-    let mut br_count = 0usize;
-    let mut skip_depth = 0usize;
-
-    let bytes = raw.as_bytes();
-    let n = bytes.len();
-    let mut i = 0;
-
-    while i < n {
-        if bytes[i] == b'<' {
-            if raw[i..].starts_with("<!--")
-                && let Some(end_comment) = raw[i + 4..].find("-->")
-            {
-                i += 4 + end_comment + 3;
-                continue;
-            }
-            if let Some(close_pos) = bytes[i + 1..].iter().position(|&b| b == b'>') {
-                let tag_content = raw[i + 1..i + 1 + close_pos].trim();
-                let is_close = tag_content.starts_with('/');
-                let bare_tag = if is_close {
-                    tag_content[1..].trim_start()
-                } else {
-                    tag_content
-                };
-                let tag_name: String = bare_tag
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric())
-                    .flat_map(char::to_lowercase)
-                    .collect();
-
-                if tag_name == "script" || tag_name == "style" {
-                    if is_close {
-                        skip_depth = skip_depth.saturating_sub(1);
-                    } else {
-                        skip_depth += 1;
-                    }
-                    i += 2 + close_pos;
-                    continue;
-                }
-
-                if skip_depth == 0 {
-                    if tag_name == "li" {
-                        if !is_close {
-                            li_count += 1;
-                        }
-                        chunks.push('\n');
-                    } else if tag_name == "br" {
-                        br_count += 1;
-                        chunks.push('\n');
-                    } else if is_block_break_tag(&tag_name) {
-                        chunks.push('\n');
-                    } else if tag_name == "td" || tag_name == "th" {
-                        chunks.push(' ');
-                    }
-                }
-
-                i += 2 + close_pos;
-                continue;
-            }
-        }
-
-        if skip_depth == 0 {
-            if bytes[i] == b'&'
-                && let Some(semi_pos) = bytes[i + 1..].iter().position(|&b| b == b';')
-            {
-                let entity = &raw[i + 1..i + 1 + semi_pos];
-                if let Some(decoded) = decode_entity_token(entity) {
-                    chunks.push(if decoded == '\u{00a0}' { ' ' } else { decoded });
-                    i += 2 + semi_pos;
-                    continue;
-                }
-            }
-            let ch = raw[i..].chars().next().expect("valid utf8");
-            chunks.push(if ch == '\u{00a0}' { ' ' } else { ch });
-            i += ch.len_utf8();
-        } else {
-            let ch = raw[i..].chars().next().expect("valid utf8");
-            i += ch.len_utf8();
-        }
-    }
-
-    let lines: Vec<String> = chunks
-        .lines()
-        .map(|ln| {
-            let collapsed = WHITESPACE_RE.replace_all(ln, " ");
-            collapsed.trim().to_owned()
-        })
-        .filter(|ln| !ln.is_empty())
-        .collect();
-
-    (lines.join("\n"), li_count, br_count)
-}
-
-/// Return single-line visible text with HTML tags removed and entities decoded.
-#[must_use]
-pub fn html_to_visible_text(raw: &str) -> String {
-    let (text, _, _) = parse_html_text(raw);
-    let collapsed = WHITESPACE_RE.replace_all(&text, " ");
-    collapsed.trim().to_owned()
-}
-
-/// Unwrap `{{cN::target(::hint)?}}` keeping target content and supporting nested LaTeX braces.
-#[must_use]
-pub fn strip_cloze_markers(text: &str) -> String {
-    if !text.contains("{{c") {
-        return text.to_owned();
-    }
-    let chars: Vec<char> = text.chars().collect();
-    let n = chars.len();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-
-    while i < n {
-        if i + 3 < n
-            && chars[i] == '{'
-            && chars[i + 1] == '{'
-            && chars[i + 2] == 'c'
-            && chars[i + 3].is_ascii_digit()
-        {
-            let mut j = i + 3;
-            while j < n && chars[j].is_ascii_digit() {
-                j += 1;
-            }
-            if j + 1 < n && chars[j] == ':' && chars[j + 1] == ':' {
-                let content_start = j + 2;
-                let mut k = content_start;
-                let mut brace_depth: usize = 0;
-                let mut sep_pos: Option<usize> = None;
-                let mut closed = false;
-
-                while k + 1 < n {
-                    if chars[k] == '}' && chars[k + 1] == '}' && brace_depth == 0 {
-                        let target_end = sep_pos.unwrap_or(k);
-                        for &ch in &chars[content_start..target_end] {
-                            out.push(ch);
-                        }
-                        i = k + 2;
-                        closed = true;
-                        break;
-                    } else if chars[k] == ':'
-                        && chars[k + 1] == ':'
-                        && brace_depth == 0
-                        && sep_pos.is_none()
-                    {
-                        sep_pos = Some(k);
-                        k += 2;
-                        continue;
-                    } else if chars[k] == '{' && (k == 0 || chars[k - 1] != '\\') {
-                        brace_depth += 1;
-                    } else if chars[k] == '}' && (k == 0 || chars[k - 1] != '\\') && brace_depth > 0
-                    {
-                        brace_depth -= 1;
-                    }
-                    k += 1;
-                }
-                if closed {
-                    continue;
-                }
-            }
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-/// Visible character length matching `core/vocab.py::visible_len`.
-#[must_use]
-pub fn visible_len(text: &str) -> usize {
-    let uncloaked = strip_cloze_markers(text);
-    let br_replaced = BR_TAG_RE.replace_all(&uncloaked, " ");
-    let tag_stripped = TAG_RE.replace_all(&br_replaced, "");
-    let unescaped = decode_html_entities(&tag_stripped);
-    let normalized = WHITESPACE_RE.replace_all(&unescaped, " ");
-    normalized.trim().chars().count()
-}
 
 fn split_top_level(text: &str, sep_char: char) -> Vec<String> {
     let mut parts = Vec::new();
@@ -660,9 +394,11 @@ fn has_bare_number(cleaned_num: &str) -> bool {
 #[must_use]
 pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
+    let visible_stem = html_to_visible_text(enunciado);
+    let visible_answer = html_to_visible_text(resposta);
 
     // ── QA.ID_IN_TEXT ────────────────────────────────────────────────────────
-    if ID_IN_TEXT_RE.is_match(enunciado) {
+    if crate::id_leak::has_leading_id_leak(&visible_stem) {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.ID_IN_TEXT"),
             Severity::Critical,
@@ -677,12 +413,12 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── QA.YESNO ─────────────────────────────────────────────────────────────
-    if YESNO_ANSWER_RE.is_match(resposta) {
+    if YESNO_ANSWER_RE.is_match(&visible_answer) {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.YESNO"),
             Severity::Critical,
             "anki-qa-designer",
-            format!("Answer is a yes/no value: '{}'", resposta.trim()),
+            format!("Answer is a yes/no value: '{}'", visible_answer.trim()),
         )
         .with_field("Resposta")
         .with_suggestion("Rephrase as a direct-recall question with a factual answer");
@@ -691,7 +427,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
         }
         diags.push(d);
     }
-    if YESNO_STEM_RE.is_match(enunciado) {
+    if YESNO_STEM_RE.is_match(&visible_stem) {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.YESNO"),
             Severity::Critical,
@@ -706,7 +442,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── QA.MC_EMBED ──────────────────────────────────────────────────────────
-    if MC_RE.is_match(enunciado) {
+    if MC_RE.is_match(&visible_stem) {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.MC_EMBED"),
             Severity::Critical,
@@ -742,7 +478,7 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── QA.CONTEXT_WARN ──────────────────────────────────────────────────────
-    if !CONTEXT_MARKERS_RE.is_match(enunciado) {
+    if !CONTEXT_MARKERS_RE.is_match(&visible_stem) {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.CONTEXT_WARN"),
             Severity::Warn,
@@ -758,10 +494,10 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── QA.NUMBER_UNIT ───────────────────────────────────────────────────────
-    let cleaned_ordinals = ORDINAL_CLASS_RE.replace_all(resposta, "");
+    let cleaned_ordinals = ORDINAL_CLASS_RE.replace_all(&visible_answer, "");
     let cleaned_num = IDENTIFIER_RE.replace_all(&cleaned_ordinals, "");
     if cleaned_num.chars().any(|c| c.is_ascii_digit())
-        && !DIRECTION_OP_RE.is_match(resposta)
+        && !DIRECTION_OP_RE.is_match(&visible_answer)
         && has_bare_number(&cleaned_num)
     {
         let mut d = Diagnostic::new(
@@ -779,9 +515,8 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── CARD.SPLIT_QA_MULTI_QUESTION (one obligation per stem) ───────────────
-    let stem_text = TAG_RE.replace_all(enunciado, " ");
-    let question_marks = stem_text.chars().filter(|&c| c == '?').count();
-    let coordinated_q = COORDINATED_Q_RE.is_match(&stem_text);
+    let question_marks = visible_stem.chars().filter(|&c| c == '?').count();
+    let coordinated_q = COORDINATED_Q_RE.is_match(&visible_stem);
     if question_marks > 1 || coordinated_q {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("CARD.SPLIT_QA_MULTI_QUESTION"),
@@ -1079,6 +814,111 @@ mod tests {
         assert!(
             d_mc.iter()
                 .any(|d| d.code == "QA.MC_EMBED" && d.severity == Severity::Critical)
+        );
+    }
+
+    #[test]
+    fn test_mc_embed_negative_portador_and_hepatite() {
+        let d1 = check_qa(
+            "Em paciente portador(a) de hepatite (B) crônica, qual o antiviral de escolha?",
+            "Tenofovir",
+            None,
+        );
+        assert!(!d1.iter().any(|d| d.code == "QA.MC_EMBED"));
+
+        let d2 = check_qa(
+            "Paciente portador(a) de síndrome nefrótica, qual o primeiro passo?",
+            "Corticoide",
+            None,
+        );
+        assert!(!d2.iter().any(|d| d.code == "QA.MC_EMBED"));
+
+        let d3 = check_qa(
+            "Sorologia para hepatite (B) positiva em adulto jovem...",
+            "Vacinação prévia",
+            None,
+        );
+        assert!(!d3.iter().any(|d| d.code == "QA.MC_EMBED"));
+
+        // Sequential options must trigger QA.MC_EMBED
+        let d_bracket = check_qa(
+            "Qual a conduta? [a] Furosemida [b] Espironolactona",
+            "Furosemida",
+            None,
+        );
+        assert!(d_bracket.iter().any(|d| d.code == "QA.MC_EMBED"));
+
+        let d_paren = check_qa(
+            "Qual a conduta? (a) Furosemida (b) Espironolactona",
+            "Furosemida",
+            None,
+        );
+        assert!(d_paren.iter().any(|d| d.code == "QA.MC_EMBED"));
+    }
+
+    #[test]
+    fn test_context_case_sensitive_acronyms() {
+        // Lowercase "em" must NOT satisfy clinical context requirement
+        let d_em = check_qa("Qual é a dose em jejum?", "10 mg", None);
+        assert!(d_em.iter().any(|d| d.code == "QA.CONTEXT_WARN"));
+
+        // Uppercase "EM" (Esclerose Múltipla) MUST satisfy clinical context requirement
+        let d_em_upper = check_qa(
+            "Na EM remitente-recorrente, qual a terapia de manutenção?",
+            "Ocrelizumabe",
+            None,
+        );
+        assert!(!d_em_upper.iter().any(|d| d.code == "QA.CONTEXT_WARN"));
+
+        // Uppercase "AVC", "DRC", "ICC" satisfy context
+        let d_avc = check_qa(
+            "No AVC isquêmico agudo, qual a janela de trombólise?",
+            "4,5 horas",
+            None,
+        );
+        assert!(!d_avc.iter().any(|d| d.code == "QA.CONTEXT_WARN"));
+    }
+
+    #[test]
+    fn test_visible_stem_and_answer_evaluations() {
+        // QA.ID_IN_TEXT inside HTML tags
+        let d_id = check_qa("<p>ANKI-123: Qual o tratamento?</p>", "Oxigênio", None);
+        assert!(d_id.iter().any(|d| d.code == "QA.ID_IN_TEXT"));
+
+        // QA.YESNO inside HTML tags
+        let d_yesno = check_qa(
+            "Em paciente adulto com dor, indicar repouso?",
+            "<b>Sim</b>",
+            None,
+        );
+        assert!(d_yesno.iter().any(|d| d.code == "QA.YESNO"));
+
+        // QA.NUMBER_UNIT inside HTML tags
+        let d_num = check_qa(
+            "Em paciente com suspeita de HAS, qual a PA?",
+            "<b>140</b>",
+            None,
+        );
+        assert!(d_num.iter().any(|d| d.code == "QA.NUMBER_UNIT"));
+
+        // QA.NUMBER_UNIT with entity inside HTML tags should pass
+        let d_num_pass = check_qa(
+            "Em paciente com suspeita de HAS, qual a PA?",
+            "<p>&gt;= 140 mmHg</p>",
+            None,
+        );
+        assert!(!d_num_pass.iter().any(|d| d.code == "QA.NUMBER_UNIT"));
+
+        // CARD.SPLIT_QA_MULTI_QUESTION inside HTML tags
+        let d_split = check_qa(
+            "<p>Em paciente adulto, qual o diagnóstico? E qual o tratamento?</p>",
+            "AIT",
+            None,
+        );
+        assert!(
+            d_split
+                .iter()
+                .any(|d| d.code == "CARD.SPLIT_QA_MULTI_QUESTION")
         );
     }
 }

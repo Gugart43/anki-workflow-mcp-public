@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -15,23 +13,9 @@ from anki_mcp.models.draft import CardDraft, MediaFigure
 ROOT = Path(__file__).resolve().parents[2]
 
 try:
-    from tests.differential.conftest import resolve_rust_binary
+    from tests.differential.conftest import OracleRunner
 except ImportError:
-    from conftest import resolve_rust_binary
-
-_binary = resolve_rust_binary
-
-
-def _oracle(op: str, **kwargs: object) -> dict:
-    result = subprocess.run(
-        [str(_binary()), "oracle"],
-        input=json.dumps([{"op": op, **kwargs}], ensure_ascii=False),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(result.stdout)[0]
+    from conftest import OracleRunner
 
 
 @pytest.mark.parametrize(
@@ -46,8 +30,8 @@ def _oracle(op: str, **kwargs: object) -> dict:
         "B01-QA-999   espaços",
     ],
 )
-def test_purge_id_leak(text: str) -> None:
-    assert _oracle("purge_id_leak", text=text) == {"text": purge_id_leak(text)}
+def test_purge_id_leak(text: str, run_oracle: OracleRunner) -> None:
+    assert run_oracle("purge_id_leak", text=text) == {"text": purge_id_leak(text)}
 
 
 @pytest.mark.parametrize(
@@ -63,8 +47,8 @@ def test_purge_id_leak(text: str) -> None:
         "#Neurologia::Cefaleia #Medicina::Outra",
     ],
 )
-def test_infer_campo(tags: list[str] | str) -> None:
-    assert _oracle("infer_campo_estudo", etiquetas=tags) == {"text": _infer_campo_estudo(tags)}
+def test_infer_campo(tags: list[str] | str, run_oracle: OracleRunner) -> None:
+    assert run_oracle("infer_campo_estudo", etiquetas=tags) == {"text": _infer_campo_estudo(tags)}
 
 
 @pytest.mark.parametrize(
@@ -79,10 +63,10 @@ def test_infer_campo(tags: list[str] | str) -> None:
         "{{c01::A}} e {{c2::B}}",
     ],
 )
-def test_renumber_cloze(sentence: str) -> None:
+def test_renumber_cloze(sentence: str, run_oracle: OracleRunner) -> None:
     card = CardDraft(tipo="CLOZE", enunciado_ou_sentenca=sentence)
     card.renumber_cloze()
-    assert _oracle("renumber_cloze", text=sentence) == {"text": card.enunciado_ou_sentenca}
+    assert run_oracle("renumber_cloze", text=sentence) == {"text": card.enunciado_ou_sentenca}
 
 
 @pytest.mark.parametrize(
@@ -107,8 +91,8 @@ def test_renumber_cloze(sentence: str) -> None:
         {"filename": "x.png", "caption": "<b>1</b> & <i>2</i>", "style": "custom"},
     ],
 )
-def test_figure_html(figure: dict) -> None:
-    assert _oracle("render_media_figure", figure=figure) == {
+def test_figure_html(figure: dict, run_oracle: OracleRunner) -> None:
+    assert run_oracle("render_media_figure", figure=figure) == {
         "text": MediaFigure(**figure).render_html()
     }
 
@@ -132,10 +116,12 @@ def test_figure_html(figure: dict) -> None:
         ),
     ],
 )
-def test_note_flow_html(nodes: list[dict], edges: list[dict], start: str) -> None:
+def test_note_flow_html(
+    nodes: list[dict], edges: list[dict], start: str, run_oracle: OracleRunner
+) -> None:
     flow = NoteFlow(
         inicio=start, nos=[FlowNode(**n) for n in nodes], arestas=[FlowEdge(**e) for e in edges]
     )
-    assert _oracle("render_note_flow", flow={"inicio": start, "nos": nodes, "arestas": edges}) == {
-        "text": flow.render_html()
-    }
+    assert run_oracle(
+        "render_note_flow", flow={"inicio": start, "nos": nodes, "arestas": edges}
+    ) == {"text": flow.render_html()}
