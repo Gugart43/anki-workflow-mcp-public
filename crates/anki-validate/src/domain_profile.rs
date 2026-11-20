@@ -6,6 +6,7 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -45,7 +46,7 @@ pub enum DomainProfileError {
     UnknownProfile(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ExamBoilerplateConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -55,7 +56,7 @@ pub struct ExamBoilerplateConfig {
     pub phrase_patterns: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct InfoPolicy {
     pub source_fidelity: String,
     pub notes_purpose: String,
@@ -68,14 +69,14 @@ pub struct InfoPolicy {
     pub preferred_list_format: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct EditorialChecklistItem {
     pub id: String,
     pub label: String,
     pub description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(try_from = "DomainProfileRaw")]
 pub struct DomainProfile {
     pub id: String,
@@ -89,10 +90,11 @@ pub struct DomainProfile {
     #[serde(default)]
     pub editorial_checklist: Vec<EditorialChecklistItem>,
     #[serde(skip)]
+    #[schemars(skip)]
     exam_regex: Option<Regex>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct DomainProfileRaw {
     id: String,
     name: String,
@@ -354,5 +356,16 @@ mod tests {
         // Direct serde also fails
         let serde_res: Result<DomainProfile, _> = serde_json::from_str(invalid_json);
         assert!(serde_res.is_err());
+    }
+
+    #[test]
+    fn domain_profile_generates_json_schema() {
+        let schema = schemars::schema_for!(DomainProfile);
+        let schema_json =
+            serde_json::to_string_pretty(&schema).expect("schema serialization must succeed");
+        assert!(schema_json.contains("default_max_note_chars"));
+        assert!(schema_json.contains("exam_boilerplate"));
+        assert!(schema_json.contains("info_policy"));
+        assert!(!schema_json.contains("exam_regex"));
     }
 }

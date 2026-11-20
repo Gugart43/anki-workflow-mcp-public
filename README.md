@@ -4,24 +4,25 @@
 
 Camada de validação, compilação e controle de qualidade para geração de flashcards Anki: **o LLM escreve; o servidor verifica estrutura, avalia fidelidade e registra**. Compatível com notas QA e Cloze e as convenções de apresentação estrutural AnkiMBR. Templates visuais, arquivos de mídia e coleções pessoais não são distribuídos neste repositório.
 
-O projeto opera sob uma arquitetura dual:
-1. **Núcleo Primário Nativo (Rust):** Servidor MCP stdio leve, determinístico e de alta performance, executando estritamente **6 ferramentas puras em memória** para compilação de rascunhos, perfil informativo de lote, avaliação de qualidade com evidência textual (`quality_v1`) e consulta de contratos. As ferramentas Rust não são um subconjunto das ferramentas Python: introduzem capacidades novas e exclusivas de controle de qualidade e compilação em memória.
-2. **Orquestrador de Persistência e Mídia (Python Legado):** Servidor FastMCP que disponibiliza 49 ferramentas (validações, mecânicas, hierarquia, corpus, além das ferramentas com estado em disco: manifesto transacional, staging em arquivos, ledger de IDs, gerenciamento de mídia física e exportação final). O núcleo Rust não é um substituto completo para os fluxos que requerem escrita persistente em disco.
+O projeto opera sob uma arquitetura de transição com Rust como única autoridade de produção:
+1. **Núcleo primário Rust:** o servidor MCP expõe 7 ferramentas MCP (`generation_contract_get`, `quality_prepare`, `quality_evaluate`, `review_batch_information`, `cards_compile_drafts`, `batch_patch_draft` e `export_reviewed_files`): seis operações puras em memória e `export_reviewed_files` para escrita local explícita. Além disso, disponibiliza subcomandos CLI nativos (`serve`, `validate`, `sync-decks` e `sync-media`) e o binário auxiliar `export-schemas`. Rust é a única autoridade de domínio e segurança HTML5.
+2. **Runtime Python legado depreciado (`src/anki_workflow_mcp/` / `src/anki_mcp/`):** o catálogo histórico permanece disponível para manifesto, staging e fluxos antigos, emitindo `DeprecationWarning` e aviso em stderr. Rust é a única autoridade de produção; a depreciação não significa paridade integral das 49 ferramentas nem autoriza sua remoção antes da verificação de migração e CI Linux/Windows.
 
 ---
 
 ## Núcleo Rust Primário
 
-O binário nativo `anki-workflow-mcp` disponibiliza o transporte MCP via stdio e expõe exatamente 6 ferramentas estritamente em memória:
+O binário nativo `anki-workflow-mcp` disponibiliza o transporte MCP via stdio e expõe 7 ferramentas MCP (`generation_contract_get`, `quality_prepare`, `quality_evaluate`, `review_batch_information`, `cards_compile_drafts`, `batch_patch_draft` e `export_reviewed_files`):
 
 | Ferramenta MCP | Descrição e Comportamento |
 |---|---|
-| `cards_compile_drafts` | Normaliza e compila rascunhos estruturados QA/Cloze em memória para `qa_csv` e `cloze_csv` canônicos, com diagnóstico estrutural e preservação de HTML seguro em `tabelas_notas` e `figuras_notas`. |
-| `review_batch_information` | Inspeciona `qa_csv` e `cloze_csv` em memória e retorna perfis de contagem de tokens, caracteres e recuperações individuais, sem teto fixo de 20 cartões. |
+| `generation_contract_get` | Retorna o contrato normativo do workflow `quality_v1` (regras de compilação, severidade de diagnósticos, mídia e critérios de aceitação). |
 | `quality_prepare` | Prepara snapshot determinístico imutável (`snapshot_hash`) e inventário por recuperação a partir dos CSVs compilados, fontes, obrigações e vínculos de evidência. |
 | `quality_evaluate` | Avalia fidelidade à fonte literal, cobertura de obrigações, consistência de evidências e revisões editoriais independentes por QA e por índice Cloze contra o snapshot. |
+| `review_batch_information` | Inspeciona `qa_csv` e `cloze_csv` em memória e retorna perfis de contagem de tokens, caracteres e recuperações individuais, sem teto fixo de 20 cartões. |
+| `cards_compile_drafts` | Normaliza e compila rascunhos estruturados QA/Cloze em memória para `qa_csv` e `cloze_csv` canônicos, com diagnóstico estrutural e preservação de HTML seguro em `tabelas_notas` e `figuras_notas`. |
 | `batch_patch_draft` | Aplica patch pontual em rascunho de cartão puramente em memória (`{draft, updates}` $\to$ `{card}`). Não lê nem grava arquivos de staging em disco. |
-| `generation_contract_get` | Retorna o contrato normativo do workflow `quality_v1` (regras de compilação, severidade de diagnósticos, mídia e critérios de aceitação). |
+| `export_reviewed_files` | Revalida integridade do conteúdo, CSV e HTML; grava exportação local com lock, idempotência e rollback. O literal `PASS` e o hash não são assinatura de aprovação editorial. |
 
 ### Limites Epistemológicos e de Governança
 - **Avaliação por recuperação:** Cada par QA e cada índice Cloze ($c_1, c_2, \dots$) constitui uma recuperação atômica inspecionada individualmente.
@@ -51,7 +52,7 @@ O binário resultante estará em:
 
 | Servidor | Executável no `PATH` | Como iniciar no cliente MCP | Escopo |
 | :--- | :--- | :--- | :--- |
-| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 6 ferramentas determinísticas em memória (`quality_v1`). |
+| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 7 ferramentas: 6 em memória e exportação local explícita. |
 | **Legado (Python)** | `anki-workflow-mcp-legacy` | `"command": "anki-workflow-mcp-legacy"` | 49 ferramentas legadas, staging em disco e `export_final`. |
 
 #### Configuração do Cliente MCP (Rust)
@@ -71,18 +72,50 @@ O binário Rust exige o subcomando `serve` para iniciar o transporte stdio. Conf
 
 *Nota para sistemas POSIX:* Substitua pelo caminho nativo correspondente (ex.: `/usr/local/bin/anki-workflow-mcp` e `args: ["serve"]`). Stdout é estritamente reservado às mensagens JSON-RPC.
 
-#### Comandos de Inspeção CLI
+#### Subcomandos CLI Nativos do Binário `anki-workflow-mcp`
 
-O executável oferece comandos diretos de linha de comando:
-- `anki-workflow-mcp --version`: exibe o nome e a versão do pacote (atualmente `0.1.0`, correspondente à versão do pacote Cargo, não uma identidade de release).
-- `anki-workflow-mcp build-info`: emite JSON estruturado com implementação, versão do pacote, `target`, revisão de origem e estado da árvore Git; caso compilado fora de um repositório Git, reporta revisão e estado desconhecidos. Os metadados não são uma assinatura de procedência.
-- `anki-workflow-mcp health`: emite JSON com status de integridade do runtime.
+Além de operar como servidor MCP stdio padrão, o executável nativo Rust disponibiliza subcomandos para operação e automação em linha de comando:
+
+- **`serve`**: Inicia o servidor MCP através do transporte padrão stdio (JSON-RPC 2.0). É o comando padrão utilizado pelos clientes MCP.
+- **`validate`**: Valida a estrutura e conformidade de arquivos de rascunho sem iniciar o loop MCP:
+  - `--qa-file <path>`: caminho do arquivo CSV ou rascunho QA a ser inspecionado.
+  - `--cloze-file <path>`: caminho do arquivo CSV ou rascunho Cloze a ser inspecionado.
+  - `--mode <quick|full>`: perfil de validação (`quick` para checagem rápida ou `full` para avaliação completa).
+  - `--format <human|json>`: formato da saída (`human` para leitura no terminal ou `json` estruturado para CI e scripts).
+- **`sync-decks`**: Sincroniza baralhos compilados diretamente contra uma coleção Anki local (`collection.anki2`).
+- **`sync-media`**: Sincroniza arquivos de mídia locais para o diretório de mídia do Anki (opera com dry-run por padrão).
+- **Comandos de inspeção e integridade**:
+  - `version` (ou `--version`): exibe o nome e a versão do pacote (atualmente `0.1.0`, correspondente à versão do pacote Cargo, não uma identidade de release).
+  - `build-info` (ou `--build-info`): emite JSON estruturado com implementação, versão do pacote, `target`, revisão de origem e estado da árvore Git; caso compilado fora de um repositório Git, reporta revisão e estado desconhecidos. Os metadados não são uma assinatura de procedência.
+  - `health`: emite JSON com status de integridade do runtime (`{"status": "ok", ...}`).
+  - `help` (ou `--help`): documenta sintaxe, argumentos e flags aceitas.
+
+#### Binário Auxiliar `export-schemas`
+
+O repositório disponibiliza o binário auxiliar Rust `export-schemas` (executável via `cargo run --locked -p anki-workflow-mcp --bin export-schemas` ou tarefa `just export-schemas`), encarregado de exportar deterministicamente os JSON Schemas canônicos (Draft 2020-12) de todos os tipos e contratos v2 a partir do Rust via `schemars` para `contracts/v2/schemas/` (com suporte a `--out-dir <path>`).
+
+### Frentes TypeScript/Node Desacopladas (Sem `package.json` na Raiz)
+
+Para manter o núcleo Rust purista e livre de dependências Node na raiz do repositório (não há `package.json` na raiz e `just rust-check` não exige Node), o ferramental TypeScript é estritamente particionado em 3 frentes desacopladas:
+
+1. **`tests/mcp-contract-ts` (Harness E2E Vitest):**
+   - Suíte E2E construída com Vitest e `@modelcontextprotocol/sdk` conectada ao binário nativo compilado via `StdioClientTransport`.
+   - Valida o ciclo de vida do servidor, a interoperabilidade stdio e a conformidade dos schemas das 7 ferramentas MCP (`just mcp-contract-ts`).
+2. **`tools/codegen-ts` + `contracts/v2` (Geração de Tipos TypeScript):**
+   - Pipeline de codegen que consome os JSON Schemas exportados do Rust via `schemars` em `contracts/v2/schemas/`.
+   - Gera definições de tipos TypeScript fortemente tipadas (`contracts/v2/ts/index.d.ts`) usando `json-schema-to-typescript`, com validação estrita via `tsc --noEmit` (`just codegen-contracts`).
+3. **`npm/anki-workflow-mcp` (Launcher npx Fino Multiplataforma):**
+   - Launcher `npx` fino multiplataforma (`@gugart43/anki-workflow-mcp`) baseado em `optionalDependencies` por plataforma/arquitetura (Linux x64, Linux ARM64, Windows x64, macOS arm64/x64), sem scripts de ciclo de vida (`postinstall`).
+   - Distribui 5 pacotes de plataforma nativa: `@gugart43/anki-workflow-mcp-linux-x64-gnu` (`x86_64-unknown-linux-gnu`), `@gugart43/anki-workflow-mcp-linux-arm64-gnu` (`aarch64-unknown-linux-gnu`), `@gugart43/anki-workflow-mcp-win32-x64` (`x86_64-pc-windows-msvc`), `@gugart43/anki-workflow-mcp-darwin-arm64` (`aarch64-apple-darwin`) e `@gugart43/anki-workflow-mcp-darwin-x64` (`x86_64-apple-darwin`).
+   - Verifica integridade SHA-256 dos binários, não realiza download em runtime e aceita `ANKI_WORKFLOW_MCP_BIN` como override local explícito (detalhes em [npm/README.md](npm/README.md)).
 
 ---
 
-### 2. Orquestrador Python Legado (Operações em Disco)
+### 2. Runtime Python Legado em `src/anki_workflow_mcp/` (Depreciado)
 
-Para fluxos de trabalho que necessitam de persistência transacional em disco, manifesto (`manifesto_init`, `manifesto_commit`), staging em arquivo, catálogos e sincronização de mídia local ou exportação final (`export_final`), execute o servidor Python:
+> **Status de Depreciação (`DeprecationWarning`):** O runtime Python legado localizado em `src/anki_workflow_mcp/` (empacotado como `src/anki_mcp/`) está formalmente depreciado. A execução do módulo emite aviso de depreciação (`DeprecationWarning`) em stderr. **O Rust é a única autoridade de produção.**
+
+O runtime Python permanece disponível exclusivamente para compatibilidade histórica transitória em fluxos de trabalho legados que ainda dependem de persistência transacional em disco, manifesto (`manifesto_init`, `manifesto_commit`), staging em arquivo, catálogos e suítes diferenciais de paridade (`just parity`). A depreciação não significa paridade integral das 49 ferramentas nem autoriza sua remoção antes da verificação completa em CI Linux e Windows.
 
 Requer Python 3.12–3.14 (CI em Python 3.13) e [uv](https://docs.astral.sh/uv/):
 
@@ -91,7 +124,7 @@ Requer Python 3.12–3.14 (CI em Python 3.13) e [uv](https://docs.astral.sh/uv/)
 uv run python -m anki_mcp.server
 ```
 
-#### Configuração do Cliente MCP (Python Legado)
+#### Configuração do Cliente MCP (Python Legado - Compatibilidade)
 
 ```json
 {
@@ -127,16 +160,23 @@ Consulte [CONTRIBUTING.md](CONTRIBUTING.md) para a lista completa de comandos e 
 
 ```text
 apps/
-  anki-workflow-mcp/    Binário executável do servidor MCP Rust (stdio) e oráculo
+  anki-workflow-mcp/    Binário executável do servidor MCP Rust (stdio), subcomandos CLI e oráculo
 crates/
   anki-domain/          Tipos de domínio fundamentais, diagnósticos e recibo v1
   anki-parser/          Parsing de CSV (split_row) e contagem de cartões
   anki-validate/        Validações de regras, compilador de drafts e motor quality_v1
-src/anki_mcp/           Servidor Python legado (FastMCP), persistência, manifesto e mídia
+src/anki_mcp/           Runtime Python legado depreciado (`src/anki_workflow_mcp/`; DeprecationWarning)
+contracts/
+  v2/                   JSON Schemas canônicos (Draft 2020-12) e tipos TypeScript derivados (.d.ts)
+  legacy/               Contratos JSON congelados da especificação MCP v1
 tests/
   differential/         Suíte de testes de paridade 1:1 entre Rust e Python
   golden/               Fixtures canônicos de teste para verificação determinística
-contracts/legacy/       Contratos JSON congelados da especificação MCP v1
+  mcp-contract-ts/      Harness E2E Vitest com @modelcontextprotocol/sdk via StdioClientTransport
+tools/
+  codegen-ts/           Codegen de tipos TypeScript a partir de JSON Schemas do Rust (schemars + json2ts)
+npm/
+  anki-workflow-mcp/    Launcher npx fino multiplataforma via optionalDependencies (sem postinstall)
 docs/                   Documentação arquitetural, guias de qualidade e ADRs
 .github/workflows/      Workflows de CI multiplataforma (Linux e Windows)
 ```

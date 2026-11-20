@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -24,37 +23,14 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = ROOT / "fixtures" / "golden_parity.json"
 
 try:
-    from tests.differential.conftest import resolve_rust_binary
+    from tests.differential.conftest import OracleRunner
 except ImportError:
-    from conftest import resolve_rust_binary
+    from conftest import OracleRunner
 
 
-def _find_rust_binary() -> Path | None:
-    try:
-        return resolve_rust_binary()
-    except pytest.skip.Exception:
-        return None
-
-
-def _run_rust_oracle(binary: Path, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    proc = subprocess.run(
-        [str(binary), "oracle"],
-        input=json.dumps(requests, ensure_ascii=False),
-        text=True,
-        encoding="utf-8",
-        capture_output=True,
-        check=True,
-    )
-    return json.loads(proc.stdout)
-
-
-def test_python_vs_rust_golden_parity() -> None:
+def test_python_vs_rust_golden_parity(run_oracle: OracleRunner) -> None:
     if os.environ.get("ANKI_SKIP_RUST_ORACLE") == "1":
         pytest.skip("ANKI_SKIP_RUST_ORACLE=1")
-
-    binary = _find_rust_binary()
-    if binary is None:
-        pytest.skip("Rust binary/cargo not available in this environment")
 
     fixtures = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
@@ -222,7 +198,7 @@ def test_python_vs_rust_golden_parity() -> None:
             )
         )
 
-    rust_results = _run_rust_oracle(binary, requests)
+    rust_results = run_oracle.raw(requests)
     assert len(rust_results) == len(expected_python)
 
     for (label, py_val), rs_val in zip(expected_python, rust_results, strict=True):

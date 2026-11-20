@@ -72,6 +72,7 @@ pub fn clean_extractor_caption(text: &str) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
 pub struct MediaFigure {
     pub filename: String,
     #[serde(default)]

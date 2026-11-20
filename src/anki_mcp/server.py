@@ -68,6 +68,11 @@ register_prompts_and_resources(mcp)
 
 
 def main() -> None:
+    print(
+        "[anki-workflow-mcp-legacy] Deprecated: use `anki-workflow-mcp serve` "
+        "for the Rust workflow. This entrypoint remains for explicit legacy compatibility.",
+        file=sys.stderr,
+    )
     mcp.run()
 
 

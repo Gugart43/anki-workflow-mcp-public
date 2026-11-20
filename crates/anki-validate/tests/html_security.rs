@@ -1,6 +1,6 @@
 //! Security boundaries for the Rust-first compiler and quality gate.
 use anki_domain::{CLOZE_HEADER_CANONICAL, QA_HEADER_CANONICAL};
-use anki_validate::{QualityInput, compile_drafts, prepare_quality};
+use anki_validate::{QualityInput, QualityMode, compile_drafts, prepare_quality};
 use serde_json::json;
 
 #[test]
@@ -65,6 +65,7 @@ fn quality_gate_rejects_active_html_even_if_tag_name_is_allowed() {
             "{QA_HEADER_CANONICAL}\nSynthetic prompt?|<b onclick=alert(1)>Alpha</b>|Test|||Synthetic 2026|test"
         ),
         cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+        mode: QualityMode::Strict,
         sources: vec![],
         obligations: vec![],
         bindings: vec![],

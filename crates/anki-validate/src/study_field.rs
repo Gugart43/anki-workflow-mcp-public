@@ -6,10 +6,11 @@ pub fn infer_campo_estudo(etiquetas: &[String]) -> String {
         if tag.is_empty() || !tag.contains("::") {
             continue;
         }
-        if EXCLUDED_PREFIXES
-            .iter()
-            .any(|prefix| tag.starts_with(prefix))
-        {
+        if EXCLUDED_PREFIXES.iter().any(|prefix| {
+            tag.get(..prefix.len())
+                .map(|head| head.eq_ignore_ascii_case(prefix))
+                .unwrap_or(false)
+        }) {
             continue;
         }
         let parts: Vec<String> = tag
@@ -78,7 +79,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_medicina_single_part_and_case_sensitive_exclusions() {
+    fn test_non_medicina_single_part_and_case_insensitive_exclusions() {
         let two_or_more = vec!["Clínica_Médica::Nefro_logia::Extra".to_string()];
         assert_eq!(
             infer_campo_estudo(&two_or_more),
@@ -91,7 +92,23 @@ mod tests {
             "Medicina::Endócrino logia"
         );
 
-        let case_sensitive = vec!["ID::123::Cardio".to_string()];
-        assert_eq!(infer_campo_estudo(&case_sensitive), "Medicina::ID::123");
+        let case_insensitive = vec![
+            "ID::123::Cardio".to_string(),
+            "FOCO::Diagnóstico".to_string(),
+            "TAG::Exame".to_string(),
+            "FONTE::Diretriz".to_string(),
+            "FOCOCLINICO::Conduta".to_string(),
+            "Pneumo::Asma".to_string(),
+        ];
+        assert_eq!(
+            infer_campo_estudo(&case_insensitive),
+            "Medicina::Pneumo::Asma"
+        );
+
+        let all_excluded = vec![
+            "id::123::Ignorar".to_string(),
+            "ID::456::IgnorarTambem".to_string(),
+        ];
+        assert_eq!(infer_campo_estudo(&all_excluded), "");
     }
 }

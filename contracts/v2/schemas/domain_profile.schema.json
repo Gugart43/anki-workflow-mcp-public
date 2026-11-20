@@ -1,0 +1,127 @@
+{
+  "$defs": {
+    "EditorialChecklistItem": {
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "description"
+      ],
+      "type": "object"
+    },
+    "ExamBoilerplateConfig": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "known_labels": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "phrase_patterns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "InfoPolicy": {
+      "properties": {
+        "forbid_exam_only_mentions": {
+          "default": false,
+          "type": "boolean"
+        },
+        "forbid_metadata_headers": {
+          "default": true,
+          "type": "boolean"
+        },
+        "forbid_verbatim_answer_restatement": {
+          "default": true,
+          "type": "boolean"
+        },
+        "notes_purpose": {
+          "type": "string"
+        },
+        "preferred_list_format": {
+          "type": "string"
+        },
+        "source_fidelity": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_fidelity",
+        "notes_purpose",
+        "preferred_list_format"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "default_max_note_chars": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "description": {
+      "type": "string"
+    },
+    "editorial_checklist": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/EditorialChecklistItem"
+      },
+      "type": "array"
+    },
+    "exam_boilerplate": {
+      "$ref": "#/$defs/ExamBoilerplateConfig"
+    },
+    "id": {
+      "type": "string"
+    },
+    "info_policy": {
+      "$ref": "#/$defs/InfoPolicy"
+    },
+    "language": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "table_max_note_chars": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "description",
+    "language",
+    "default_max_note_chars",
+    "table_max_note_chars",
+    "exam_boilerplate",
+    "info_policy"
+  ],
+  "title": "DomainProfile",
+  "type": "object"
+}

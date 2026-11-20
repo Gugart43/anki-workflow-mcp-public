@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "retrieval",
+    "context",
+    "notes"
+  ],
+  "title": "EvidenceScope",
+  "type": "string"
+}

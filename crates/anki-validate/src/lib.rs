@@ -42,8 +42,10 @@ pub use cloze_renumber::renumber_cloze;
 pub use crossrefs::check_crossrefs;
 pub use csv_structure::{check_bom, check_csv};
 pub use domain_profile::{DomainProfile, DomainProfileError};
-pub use draft_compile::compile_drafts;
-pub use draft_normalize::{CardTipo, RawCardDraft, normalize_draft};
+pub use draft_compile::{compile_drafts, compile_drafts_strict};
+pub use draft_normalize::{
+    CardTipo, RawCardDraft, StrictRawCardDraft, normalize_draft, normalize_draft_strict,
+};
 pub use draft_patch::{partition_quarantine, patch_draft};
 pub use hints::check_hints;
 pub use html_text::{
@@ -69,7 +71,7 @@ pub use notes_render::render_extra_notes;
 pub use qa::check_qa;
 pub use quality::{
     QUALITY_SCHEMA_VERSION, QualityBinding, QualityDimensions, QualityEvidence, QualityInput,
-    QualityObligation, QualityReport, QualityReview, QualitySource, evaluate_quality,
+    QualityMode, QualityObligation, QualityReport, QualityReview, QualitySource, evaluate_quality,
     prepare_quality,
 };
 pub use quality::{QualityPrepareInput, prepare_quality_input};

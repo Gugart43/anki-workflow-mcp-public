@@ -1,28 +1,32 @@
 schema: spec-driven
 
 context: |
-  Language: Portuguese
-  All artifacts must be written in Portuguese.
-  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  Idioma padrão: português (pt-BR); cabeçalhos estruturais e SHALL/MUST/WHEN/THEN em inglês.
+  Núcleo Rust é a fonte de verdade para domínio, parsing e segurança HTML5.
+  A evolução pós-PR10 mantém seis ferramentas MCP puras e acrescenta exportação local explícita.
+  Operações de coleção Anki são exclusivamente CLI local; Python é legado de compatibilidade.
+  Publicação, deploy e remoção definitiva do legado exigem verificação e autorização separadas.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always state what is out of scope
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Explicitar In-Scope e Out-of-Scope e alterações CLI/MCP.
+    - Distinguir workspace Rust de legado Python e subprojetos Node isolados.
+  specs:
+    - Incluir cenários positivos e negativos WHEN/THEN e códigos estáveis.
+    - Explicitar garantias fail-closed, limites de confiança e schemas estritos.
+  design:
+    - Registrar Implementado vs Planejado e desvios aceitos das ADRs.
+    - Usar somente fixtures sintéticas; não copiar dados de coleções reais.
+  tasks:
+    - Exigir critérios verificáveis por execução real, nunca inferir aprovação de CI remoto.
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+operations:
+  apply:
+    guidance: |
+      Executar openspec validate --strict e alinhar schema MCP, Rust e testes reais.
+      Preservar evidência dos gates e registrar bloqueios sem inventar resultados.
+  archive:
+    guidance: |
+      Promover delta specs antes de arquivar. Registrar desvios e evidência disponível.
+      Não inventar link de CI pós-merge quando não houve publicação/merge.
+

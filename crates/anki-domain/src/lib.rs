@@ -620,7 +620,6 @@ pub struct InvalidContentDigest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
 #[serde(try_from = "String")]
-#[schemars(with = "String")]
 pub struct ContentDigest(String);
 
 impl ContentDigest {

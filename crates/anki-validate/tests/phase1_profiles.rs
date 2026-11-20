@@ -555,3 +555,288 @@ fn test_diagnostic_ordering_preserved() {
         }
     }
 }
+
+// ============================================================================
+// 5. Section C Boundary & Robustness Coverage Tests
+// ============================================================================
+
+#[test]
+fn test_table_length_boundary_1200_vs_2500() {
+    let profile = DomainProfile::med_br();
+    assert_eq!(profile.default_max_note_chars, 1200);
+    assert_eq!(profile.table_max_note_chars, 2500);
+
+    // 1. Without table: 1200 chars passes, 1201 chars triggers NOTE.LENGTH_WARN
+    let prose_1200 = "a".repeat(1200);
+    let diags_1200 = check_notes_with_profile(&prose_1200, "Ans", None, "Notas", None, profile);
+    assert!(!diags_1200.iter().any(|d| d.code == "NOTE.LENGTH_WARN"));
+
+    let prose_1201 = "a".repeat(1201);
+    let diags_1201 = check_notes_with_profile(&prose_1201, "Ans", None, "Notas", None, profile);
+    let length_warn = diags_1201
+        .iter()
+        .find(|d| d.code == "NOTE.LENGTH_WARN")
+        .expect("1201 chars without table must trigger NOTE.LENGTH_WARN");
+    assert!(length_warn.message.contains("1201"));
+    assert!(length_warn.message.contains("≤ 1200"));
+
+    // 2. With table: table ceiling expands to 2500
+    // A 1800-char note containing a table passes
+    let table_inner = "x".repeat(1700);
+    let table_note_1800 = format!("<p>Intro</p><table><tr><td>{table_inner}</td></tr></table>");
+    let len_1800 = visible_char_count(&table_note_1800);
+    assert!(len_1800 > 1200 && len_1800 <= 2500);
+    let diags_table_1800 =
+        check_notes_with_profile(&table_note_1800, "Ans", None, "Notas", None, profile);
+    assert!(
+        !diags_table_1800
+            .iter()
+            .any(|d| d.code == "NOTE.LENGTH_WARN")
+    );
+
+    // 2500 chars with table passes
+    let prefix = "<table><tr><td>";
+    let suffix = "</td></tr></table>";
+    let table_content_2500 = "b".repeat(2500);
+    let table_note_2500 = format!("{prefix}{table_content_2500}{suffix}");
+    assert_eq!(visible_char_count(&table_note_2500), 2500);
+    let diags_table_2500 =
+        check_notes_with_profile(&table_note_2500, "Ans", None, "Notas", None, profile);
+    assert!(
+        !diags_table_2500
+            .iter()
+            .any(|d| d.code == "NOTE.LENGTH_WARN")
+    );
+
+    // 2501 chars with table triggers NOTE.LENGTH_WARN
+    let table_content_2501 = "b".repeat(2501);
+    let table_note_2501 = format!("{prefix}{table_content_2501}{suffix}");
+    assert_eq!(visible_char_count(&table_note_2501), 2501);
+    let diags_table_2501 =
+        check_notes_with_profile(&table_note_2501, "Ans", None, "Notas", None, profile);
+    let table_warn = diags_table_2501
+        .iter()
+        .find(|d| d.code == "NOTE.LENGTH_WARN")
+        .expect("2501 chars with table must trigger NOTE.LENGTH_WARN");
+    assert!(table_warn.message.contains("2501"));
+    assert!(table_warn.message.contains("≤ 2500"));
+}
+
+#[test]
+fn test_general_profile_suppresses_exam_only_warn() {
+    let exam_text = "Cobrado na prova da USP 2023.";
+    let med_profile = DomainProfile::med_br();
+    let gen_profile = DomainProfile::general();
+
+    let med_diags = check_notes_with_profile(exam_text, "Ans", Some(1), "Notas", None, med_profile);
+    assert!(
+        med_diags.iter().any(|d| d.code == "NOTE.EXAM_ONLY_WARN"),
+        "med_br must flag exam-only note"
+    );
+
+    let gen_diags = check_notes_with_profile(exam_text, "Ans", Some(1), "Notas", None, gen_profile);
+    assert!(
+        !gen_diags.iter().any(|d| d.code == "NOTE.EXAM_ONLY_WARN"),
+        "general profile must suppress NOTE.EXAM_ONLY_WARN"
+    );
+}
+
+#[test]
+fn test_note_style_warn_on_unbolded_list_items() {
+    // Unbolded list items trigger NOTE.STYLE_WARN
+    let unbolded_cases = [
+        "<ul><li>Item sem negrito explicativo</li></ul>",
+        "<ol><li>Apenas texto simples</li></ol>",
+        "• Item sem tags com bullet simples",
+        "- Item com hífen sem negrito",
+    ];
+    for case in unbolded_cases {
+        let diags = check_notes(case, "Ans", Some(1));
+        assert!(
+            diags.iter().any(|d| d.code == "NOTE.STYLE_WARN"),
+            "Expected NOTE.STYLE_WARN on: {case}"
+        );
+    }
+
+    // Properly bolded list items do NOT trigger NOTE.STYLE_WARN
+    let bolded_cases = [
+        "<ul><li><b>Item em negrito:</b> Explicação clínica estruturada.</li></ul>",
+        "<ul><li><strong>Item forte:</strong> Explicação clínica.</li></ul>",
+        "• <b>Tópico:</b> Explicação com bullet e negrito.",
+        "- <b>Tópico:</b> Explicação com hífen e negrito.",
+    ];
+    for case in bolded_cases {
+        let diags = check_notes(case, "Ans", Some(1));
+        assert!(
+            !diags.iter().any(|d| d.code == "NOTE.STYLE_WARN"),
+            "Unexpected NOTE.STYLE_WARN on bolded case: {case}"
+        );
+    }
+
+    // List inside table is stripped from style warning
+    let table_list =
+        "<table><tr><td><ul><li>Item na tabela sem negrito</li></ul></td></tr></table>";
+    let diags_table = check_notes(table_list, "Ans", Some(1));
+    assert!(
+        !diags_table.iter().any(|d| d.code == "NOTE.STYLE_WARN"),
+        "Lists inside tables should not trigger NOTE.STYLE_WARN"
+    );
+}
+
+#[test]
+fn test_note_metadata_forbidden_headers() {
+    let metadata_prefixes = [
+        "ID: 42<br>Explicação pedagógica.",
+        "Âncora: anexo_cardio<br>Explicação pedagógica.",
+        "Anchor: ref_1<br>Explicação pedagógica.",
+        "Cross-ref: B01-QA-02<br>Explicação pedagógica.",
+        "Cross ref: B01-QA-02<br>Explicação pedagógica.",
+        "Relevância: alta<br>Explicação pedagógica.",
+        "Relevancia: 5 estrelas<br>Explicação pedagógica.",
+    ];
+
+    for meta in metadata_prefixes {
+        let diags = check_notes(meta, "Ans", Some(1));
+        let d = diags
+            .iter()
+            .find(|d| d.code == "NOTE.METADATA")
+            .unwrap_or_else(|| panic!("Expected NOTE.METADATA on: {meta}"));
+        assert_eq!(d.severity, Severity::Critical);
+    }
+
+    // Legitimate prose that mentions concepts without header colon is NOT metadata
+    let safe_prose = "Identificação de critérios maiores de Jones.<br>Âncora cirúrgica na valva aórtica com relevância clínica.";
+    let safe_diags = check_notes(safe_prose, "Ans", Some(1));
+    assert!(!safe_diags.iter().any(|d| d.code == "NOTE.METADATA"));
+}
+
+#[test]
+fn test_explicit_max_length_override() {
+    let profile = DomainProfile::med_br();
+    let prose_450 = "x".repeat(450);
+    let prose_550 = "x".repeat(550);
+
+    // Overriding default 1200 with 500
+    let diags_450 = check_notes_with_profile(&prose_450, "Ans", None, "Notas", Some(500), profile);
+    assert!(!diags_450.iter().any(|d| d.code == "NOTE.LENGTH_WARN"));
+
+    let diags_550 = check_notes_with_profile(&prose_550, "Ans", None, "Notas", Some(500), profile);
+    let warn = diags_550
+        .iter()
+        .find(|d| d.code == "NOTE.LENGTH_WARN")
+        .expect("550 chars must trigger NOTE.LENGTH_WARN when max is 500");
+    assert!(warn.message.contains("≤ 500"));
+
+    // With table: effective_max is base_max.max(table_max_note_chars = 2500)
+    // Overriding with 500 still allows tables up to 2500
+    let table_note_1800 = format!("<table><tr><td>{}</td></tr></table>", "x".repeat(1800));
+    let diags_table_override =
+        check_notes_with_profile(&table_note_1800, "Ans", None, "Notas", Some(500), profile);
+    assert!(
+        !diags_table_override
+            .iter()
+            .any(|d| d.code == "NOTE.LENGTH_WARN")
+    );
+
+    // Overriding with higher base_max (e.g. 3000) raises table limit to 3000
+    let table_note_2800 = format!("<table><tr><td>{}</td></tr></table>", "x".repeat(2800));
+    let diags_table_3000 =
+        check_notes_with_profile(&table_note_2800, "Ans", None, "Notas", Some(3000), profile);
+    assert!(
+        !diags_table_3000
+            .iter()
+            .any(|d| d.code == "NOTE.LENGTH_WARN")
+    );
+
+    let table_note_3100 = format!("<table><tr><td>{}</td></tr></table>", "x".repeat(3100));
+    let diags_table_3100 =
+        check_notes_with_profile(&table_note_3100, "Ans", None, "Notas", Some(3000), profile);
+    assert!(
+        diags_table_3100
+            .iter()
+            .any(|d| d.code == "NOTE.LENGTH_WARN")
+    );
+}
+
+#[test]
+fn test_empty_and_tags_only_notes_produce_no_diagnostics() {
+    let empty_cases = [
+        "",
+        "   ",
+        "\t\n  \r\n",
+        "<p></p>",
+        "<p>   </p>",
+        "<br><br/>",
+        "<div><span></span></div>",
+        "<p><br/></p>",
+    ];
+
+    for case in empty_cases {
+        let diags = check_notes(case, "Ans", Some(1));
+        assert!(
+            diags.is_empty(),
+            "Expected empty diagnostics for '{case}', got: {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn test_exam_boilerplate_disabled_ignores_malformed_json_regex() {
+    let malformed_pattern_json = r#"{
+        "id": "disabled_bad_regex",
+        "name": "Disabled Regex Profile",
+        "description": "test",
+        "language": "pt",
+        "default_max_note_chars": 1200,
+        "table_max_note_chars": 2500,
+        "exam_boilerplate": {
+            "enabled": false,
+            "known_labels": ["USP"],
+            "phrase_patterns": ["(?i)(unclosed_group["]
+        },
+        "info_policy": {
+            "source_fidelity": "ok",
+            "notes_purpose": "ok",
+            "forbid_exam_only_mentions": false,
+            "preferred_list_format": "•"
+        }
+    }"#;
+
+    let profile = DomainProfile::from_json_str(malformed_pattern_json)
+        .expect("malformed regex pattern must not fail when exam_boilerplate is disabled");
+    assert!(!profile.exam_boilerplate.enabled);
+    assert!(profile.exam_boilerplate_regex().is_none());
+    assert!(!profile.is_exam_only_note("Cobrado na prova da USP 2023."));
+}
+
+#[test]
+fn test_compute_notes_metrics_prose_vs_table_weights() {
+    // 100 characters of pure prose
+    let prose_100 = "0123456789".repeat(10);
+    assert_eq!(visible_char_count(&prose_100), 100);
+    let prose_metrics = compute_notes_metrics(&prose_100);
+    assert_eq!(prose_metrics.prose_chars, 100);
+    assert_eq!(prose_metrics.table_chars, 0);
+    assert_eq!(prose_metrics.effective_cognitive_load, 100); // 100 * 1.0
+
+    // 100 visible characters in a table
+    let table_100 = format!(
+        "<table><tr><td>{}</td></tr></table>",
+        "0123456789".repeat(10)
+    );
+    assert_eq!(visible_char_count(&table_100), 100);
+    let table_metrics = compute_notes_metrics(&table_100);
+    assert_eq!(table_metrics.prose_chars, 0);
+    assert_eq!(table_metrics.table_chars, 100);
+    assert_eq!(table_metrics.table_count, 1);
+    assert_eq!(table_metrics.effective_cognitive_load, 55); // round(100 * 0.55) = 55
+
+    // Combined 100 prose + 100 table (with 1 block-boundary space in linearized visible text)
+    let combined = format!("<p>{}</p>{}", prose_100, table_100);
+    assert_eq!(visible_char_count(&combined), 201);
+    let combined_metrics = compute_notes_metrics(&combined);
+    assert_eq!(combined_metrics.total_visible_chars, 201);
+    assert_eq!(combined_metrics.prose_chars, 100);
+    assert_eq!(combined_metrics.table_chars, 100);
+    assert_eq!(combined_metrics.effective_cognitive_load, 155); // round(100*1.0 + 100*0.55) = 155
+}

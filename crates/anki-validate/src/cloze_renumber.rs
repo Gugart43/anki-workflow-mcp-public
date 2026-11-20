@@ -21,13 +21,12 @@ pub fn renumber_cloze(text: &str) -> String {
         });
     }
 
-    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut cursor: usize = 0;
 
     for span in &spans {
         if span.start > cursor {
-            out.extend(&chars[cursor..span.start]);
+            out.push_str(&text[cursor..span.start]);
         }
         let new_idx = mapping[&span.index];
         out.push_str("{{c");
@@ -42,8 +41,8 @@ pub fn renumber_cloze(text: &str) -> String {
         cursor = span.end;
     }
 
-    if cursor < chars.len() {
-        out.extend(&chars[cursor..]);
+    if cursor < text.len() {
+        out.push_str(&text[cursor..]);
     }
 
     out
@@ -73,6 +72,13 @@ mod tests {
     fn test_renumber_cloze_unicode_hints_and_nested_braces() {
         let input = "Ação: {{c4::\\frac{a}{b}::fração}} e {{c10::café::bebida}} fim.";
         let expected = "Ação: {{c1::\\frac{a}{b}::fração}} e {{c2::café::bebida}} fim.";
+        assert_eq!(renumber_cloze(input), expected);
+    }
+
+    #[test]
+    fn test_renumber_cloze_emoji_and_parity_escapes() {
+        let input = "🩺 Diagnóstico: {{c9::\\left\\{ x \\right\\}::fórmula}} e 🎉 {{c3::imunidade::defesa}} 💉 {{c9::repetido}} fim.";
+        let expected = "🩺 Diagnóstico: {{c1::\\left\\{ x \\right\\}::fórmula}} e 🎉 {{c2::imunidade::defesa}} 💉 {{c1::repetido}} fim.";
         assert_eq!(renumber_cloze(input), expected);
     }
 }

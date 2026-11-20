@@ -1,0 +1,181 @@
+{
+  "$defs": {
+    "EvidenceScope": {
+      "enum": [
+        "retrieval",
+        "context",
+        "notes"
+      ],
+      "type": "string"
+    },
+    "QualityBindingArg": {
+      "additionalProperties": false,
+      "properties": {
+        "cloze_index": {
+          "default": null,
+          "format": "int64",
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/QualityEvidenceArg"
+          },
+          "type": "array"
+        },
+        "note_type": {
+          "$ref": "#/$defs/StrictNoteTypeArg"
+        },
+        "obligation_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source_row": {
+          "format": "int64",
+          "minimum": 2,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "note_type",
+        "source_row",
+        "obligation_ids",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "QualityEvidenceArg": {
+      "additionalProperties": false,
+      "properties": {
+        "locator": {
+          "type": "string"
+        },
+        "quote": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/EvidenceScope"
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "quote",
+        "locator",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "QualityMode": {
+      "description": "Validation mode for quality checks: `Quick` for lightweight structural/HTML checks,\nor `Strict` for full source grounding and editorial review checks.",
+      "enum": [
+        "quick",
+        "strict"
+      ],
+      "type": "string"
+    },
+    "QualityObligationArg": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "source_ids"
+      ],
+      "type": "object"
+    },
+    "QualitySourceArg": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "locator": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "version",
+        "locator",
+        "text"
+      ],
+      "type": "object"
+    },
+    "StrictNoteTypeArg": {
+      "enum": [
+        "QA",
+        "CL"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindings": {
+      "items": {
+        "$ref": "#/$defs/QualityBindingArg"
+      },
+      "type": "array"
+    },
+    "cloze_csv": {
+      "type": "string"
+    },
+    "mode": {
+      "$ref": "#/$defs/QualityMode",
+      "default": "strict"
+    },
+    "obligations": {
+      "items": {
+        "$ref": "#/$defs/QualityObligationArg"
+      },
+      "type": "array"
+    },
+    "qa_csv": {
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/QualitySourceArg"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "qa_csv",
+    "cloze_csv"
+  ],
+  "title": "QualityPrepareArgs",
+  "type": "object"
+}

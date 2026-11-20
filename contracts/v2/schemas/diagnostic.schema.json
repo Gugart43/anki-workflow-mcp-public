@@ -1,0 +1,66 @@
+{
+  "$defs": {
+    "Severity": {
+      "enum": [
+        "CRITICAL",
+        "WARN",
+        "INFO",
+        "LOG"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "auto_fix_available": {
+      "type": "boolean"
+    },
+    "code": {
+      "type": "string"
+    },
+    "field": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fix_preview": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "owner_skill": {
+      "type": "string"
+    },
+    "row": {
+      "format": "uint",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "severity": {
+      "$ref": "#/$defs/Severity"
+    },
+    "suggestion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "code",
+    "severity",
+    "owner_skill",
+    "message",
+    "auto_fix_available"
+  ],
+  "title": "Diagnostic",
+  "type": "object"
+}

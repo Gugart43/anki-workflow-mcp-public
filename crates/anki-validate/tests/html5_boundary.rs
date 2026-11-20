@@ -6,7 +6,7 @@ use anki_validate::media_figure::{MediaFigure, render_media_figure};
 use anki_validate::sanitize::sanitize_field;
 use anki_validate::table_render::TableSpec;
 use anki_validate::vocab::{ALLOWED_CLASSES, ALLOWED_TAGS, is_always_allowed_tag, unknown_classes};
-use anki_validate::{QualityInput, compile_drafts, prepare_quality};
+use anki_validate::{QualityInput, QualityMode, compile_drafts, prepare_quality};
 use schemars::schema_for;
 use serde_json::json;
 
@@ -32,6 +32,7 @@ fn f2_semantic_tags_accepted_in_compiler_and_gate() {
     let input = QualityInput {
         qa_csv: qa_csv.to_owned(),
         cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+        mode: QualityMode::Strict,
         sources: vec![],
         obligations: vec![],
         bindings: vec![],
@@ -97,6 +98,7 @@ fn clinical_inequalities_and_entities_preserved_and_safe() {
         let input = QualityInput {
             qa_csv: qa_csv.to_owned(),
             cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+            mode: QualityMode::Strict,
             sources: vec![],
             obligations: vec![],
             bindings: vec![],
@@ -203,6 +205,7 @@ fn active_content_attacks_fail_closed() {
         let input = QualityInput {
             qa_csv: format!("{QA_HEADER_CANONICAL}\nPergunta?|{payload}|Notas|||Ref|tag"),
             cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+            mode: QualityMode::Strict,
             sources: vec![],
             obligations: vec![],
             bindings: vec![],

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use serde_json::{Value, json};
 
 use crate::cloze_renumber::renumber_cloze;
-use crate::draft_normalize::normalize_draft;
+use crate::draft_normalize::{normalize_draft, normalize_draft_strict};
 use crate::id_leak::purge_id_leak;
 use crate::image_alias::unique_figures;
 use crate::legacy_adapter::{DraftNotesInput, compile_extra_notes};
@@ -26,11 +26,51 @@ fn write_csv(headers: &[&str], rows: &[Vec<String>]) -> String {
     lines.join("\n")
 }
 
+fn has_unsafe_value(value: &Value) -> bool {
+    match value {
+        Value::String(text) => crate::html_security::has_unsafe_html(text),
+        Value::Array(items) => items.iter().any(has_unsafe_value),
+        Value::Object(items) => items.values().any(has_unsafe_value),
+        _ => false,
+    }
+}
+
 pub fn compile_drafts(
     drafts: &[Value],
     auto_renumber_cloze: bool,
     auto_purge_id_leaks: bool,
     default_campo_estudo: &str,
+) -> Result<Value, String> {
+    compile_drafts_inner(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        false,
+    )
+}
+
+pub fn compile_drafts_strict(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+) -> Result<Value, String> {
+    compile_drafts_inner(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        true,
+    )
+}
+
+fn compile_drafts_inner(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+    strict: bool,
 ) -> Result<Value, String> {
     let mut qa_rows: Vec<Vec<String>> = Vec::new();
     let mut cloze_rows: Vec<Vec<String>> = Vec::new();
@@ -43,29 +83,41 @@ pub fn compile_drafts(
     let mut illustrated_cards: usize = 0;
     let mut tables_rendered: usize = 0;
 
-    for raw_draft in drafts {
-        let card = normalize_draft(raw_draft)?;
-        fn unsafe_value(value: &Value) -> bool {
-            match value {
-                Value::String(text) => crate::html_security::has_unsafe_html(text),
-                Value::Array(items) => items.iter().any(unsafe_value),
-                Value::Object(items) => items.values().any(unsafe_value),
-                _ => false,
-            }
-        }
-        if unsafe_value(&card) {
-            return Err("Unsafe HTML attributes or active content in draft".to_owned());
-        }
-        let obj = card
-            .as_object()
-            .ok_or_else(|| "Normalized draft must be a JSON object".to_string())?;
+    let mut errors: Vec<String> = Vec::new();
 
-        let tipo = obj
-            .get("tipo")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Draft missing string field 'tipo'".to_string())?;
+    for (idx, raw_draft) in drafts.iter().enumerate() {
+        let card = if strict {
+            normalize_draft_strict(raw_draft)
+        } else {
+            normalize_draft(raw_draft)
+        };
+        let card = match card {
+            Ok(c) => c,
+            Err(err) => {
+                errors.push(format!("drafts[{idx}]: {err}"));
+                continue;
+            }
+        };
+        if has_unsafe_value(&card) {
+            errors.push(format!(
+                "drafts[{idx}]: Unsafe HTML attributes or active content in draft"
+            ));
+            continue;
+        }
+        let Some(obj) = card.as_object() else {
+            errors.push(format!(
+                "drafts[{idx}]: Normalized draft must be a JSON object"
+            ));
+            continue;
+        };
+
+        let Some(tipo) = obj.get("tipo").and_then(Value::as_str) else {
+            errors.push(format!("drafts[{idx}]: Draft missing string field 'tipo'"));
+            continue;
+        };
         if tipo != "QA" && tipo != "CLOZE" {
-            return Err(format!("Unsupported draft tipo: {tipo}"));
+            errors.push(format!("drafts[{idx}]: Unsupported draft tipo: {tipo}"));
+            continue;
         }
 
         let mut stem = obj
@@ -105,6 +157,8 @@ pub fn compile_drafts(
             }
         }
 
+        let mut draft_errors: Vec<String> = Vec::new();
+
         // 3. Format 'Notas Adicionais' via single compiler path (F2 / legacy_adapter)
         let notes_input = DraftNotesInput {
             notas_adicionais: obj.get("notas_adicionais"),
@@ -112,8 +166,14 @@ pub fn compile_drafts(
             tabelas_notas: obj.get("tabelas_notas"),
             figuras_notas: obj.get("figuras_notas"),
         };
-        let compiled_notes = compile_extra_notes(&notes_input, CompileMode::LegacyCompat)
-            .map_err(|e| e.to_string())?;
+        let compiled_notes = match compile_extra_notes(&notes_input, CompileMode::LegacyCompat) {
+            Ok(notes) => notes,
+            Err(err) => {
+                draft_errors.push(format!("drafts[{idx}]: {err}"));
+                errors.extend(draft_errors);
+                continue;
+            }
+        };
 
         tables_rendered += compiled_notes.rendered.table_count;
 
@@ -131,9 +191,10 @@ pub fn compile_drafts(
             illustrated_cards += 1;
             let mut buf = String::new();
             for fig in &figs {
-                let figure: crate::media_figure::MediaFigure =
-                    serde_json::from_value(fig.clone()).map_err(|e| e.to_string())?;
-                buf.push_str(&render_media_figure(&figure));
+                match serde_json::from_value::<crate::media_figure::MediaFigure>(fig.clone()) {
+                    Ok(figure) => buf.push_str(&render_media_figure(&figure)),
+                    Err(err) => draft_errors.push(format!("drafts[{idx}]: {err}")),
+                }
             }
             buf
         } else {
@@ -165,7 +226,11 @@ pub fn compile_drafts(
                 }
             }
             Some(Value::Null) | None => {}
-            Some(_) => return Err("referencias must be an array, string, or null".to_string()),
+            Some(_) => {
+                draft_errors.push(format!(
+                    "drafts[{idx}]: referencias must be an array, string, or null"
+                ));
+            }
         }
 
         for r in compiled_notes.rendered.source_refs {
@@ -203,7 +268,12 @@ pub fn compile_drafts(
                 parts.join(" ")
             }
             Some(Value::Null) | None => String::new(),
-            Some(_) => return Err("etiquetas must be an array, string, or null".to_string()),
+            Some(_) => {
+                draft_errors.push(format!(
+                    "drafts[{idx}]: etiquetas must be an array, string, or null"
+                ));
+                String::new()
+            }
         };
 
         if let Some(id_val) = obj.get("id").and_then(Value::as_str) {
@@ -238,9 +308,21 @@ pub fn compile_drafts(
         let (clean_field_study, _) = sanitize_field(&raw_campo, false, false);
 
         if tipo == "QA" {
-            qa_count += 1;
             let (clean_resp, _) = sanitize_field(&resposta, false, false);
-            qa_rows.push(vec![
+            if clean_resp.trim().is_empty()
+                || crate::html_text::html_to_visible_text(&clean_resp)
+                    .trim()
+                    .is_empty()
+            {
+                draft_errors.push(format!(
+                    "drafts[{idx}]: QA draft must have a non-empty 'resposta'"
+                ));
+            }
+            if !draft_errors.is_empty() {
+                errors.extend(draft_errors);
+                continue;
+            }
+            let row = vec![
                 clean_stem,
                 clean_resp,
                 clean_field_study,
@@ -248,18 +330,47 @@ pub fn compile_drafts(
                 clean_img,
                 clean_refs,
                 tags_str,
-            ]);
+            ];
+            if row
+                .iter()
+                .any(|field| crate::html_security::has_unsafe_html(field))
+            {
+                errors.push(format!(
+                    "drafts[{idx}]: Unsafe HTML attributes or active content in compiled draft"
+                ));
+                continue;
+            }
+            qa_count += 1;
+            qa_rows.push(row);
         } else {
-            cloze_count += 1;
-            cloze_rows.push(vec![
+            if !draft_errors.is_empty() {
+                errors.extend(draft_errors);
+                continue;
+            }
+            let row = vec![
                 clean_stem,
                 clean_notes,
                 clean_field_study,
                 clean_img,
                 clean_refs,
                 tags_str,
-            ]);
+            ];
+            if row
+                .iter()
+                .any(|field| crate::html_security::has_unsafe_html(field))
+            {
+                errors.push(format!(
+                    "drafts[{idx}]: Unsafe HTML attributes or active content in compiled draft"
+                ));
+                continue;
+            }
+            cloze_count += 1;
+            cloze_rows.push(row);
         }
+    }
+
+    if !errors.is_empty() {
+        return Err(errors.join("; "));
     }
 
     let qa_csv = write_csv(&QA_FIELDS, &qa_rows);
@@ -369,8 +480,7 @@ mod tests {
             "figuras_notas": [
                 {
                     "filename": "neuro_fluxo_sintetico.png",
-                    "caption": "Fluxo sintético de decisão diagnóstica.",
-                    "alt": "Diagrama de decisão diagnóstica sintético"
+                    "caption": "Fluxo sintético de decisão diagnóstica."
                 }
             ]
         });
@@ -382,5 +492,69 @@ mod tests {
         assert!(notes.contains("<figure"));
         assert!(notes.contains("<figcaption>"));
         assert!(notes.contains("neuro_fluxo_sintetico.png"));
+    }
+
+    #[test]
+    fn compile_drafts_strict_rejects_unknown_fields() {
+        let draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta?",
+            "resposta": "Resposta.",
+            "extra_field": 1
+        });
+        let err = compile_drafts_strict(std::slice::from_ref(&draft), true, true, "")
+            .expect_err("strict should reject extra_field");
+        assert!(err.contains("drafts[0]: unknown field `extra_field`"));
+
+        // Tolerant compiler accepts it
+        let ok = compile_drafts(&[draft], true, true, "");
+        assert!(ok.is_ok());
+    }
+
+    #[test]
+    fn compile_drafts_aggregates_multiple_indexed_errors() {
+        let draft0 = json!({
+            "tipo": "INVALID",
+            "enunciado_ou_sentenca": "Texto 0"
+        });
+        let draft1 = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Texto 1",
+            "resposta": "   "
+        });
+        let err = compile_drafts(&[draft0, draft1], true, true, "")
+            .expect_err("multiple errors must be collected");
+        assert!(err.contains("drafts[0]: Unsupported draft tipo: 'INVALID'"));
+        assert!(err.contains("drafts[1]: QA draft must have a non-empty 'resposta'"));
+        assert!(err.contains("; "));
+    }
+
+    #[test]
+    fn compile_drafts_rejects_empty_and_whitespace_and_empty_html_qa_answers() {
+        for empty_val in ["", "   ", "<b>  </b>", "<p></p>"] {
+            let draft = json!({
+                "tipo": "QA",
+                "enunciado_ou_sentenca": "Pergunta?",
+                "resposta": empty_val
+            });
+            let err = compile_drafts(&[draft], true, true, "")
+                .expect_err("empty visible resposta must be rejected");
+            assert!(
+                err.contains("drafts[0]: QA draft must have a non-empty 'resposta'"),
+                "failed for: {empty_val}"
+            );
+        }
+    }
+
+    #[test]
+    fn compile_drafts_rejects_unsafe_html_before_and_after_compilation() {
+        let unsafe_draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "<script>alert('xss')</script>Pergunta?",
+            "resposta": "Resposta."
+        });
+        let err = compile_drafts(&[unsafe_draft], true, true, "")
+            .expect_err("unsafe draft must be rejected");
+        assert!(err.contains("drafts[0]: Unsafe HTML attributes or active content in draft"));
     }
 }

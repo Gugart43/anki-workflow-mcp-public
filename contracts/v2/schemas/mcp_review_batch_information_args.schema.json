@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cloze_csv": {
+      "type": "string"
+    },
+    "qa_csv": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "qa_csv",
+    "cloze_csv"
+  ],
+  "title": "ReviewBatchInformationArgs",
+  "type": "object"
+}

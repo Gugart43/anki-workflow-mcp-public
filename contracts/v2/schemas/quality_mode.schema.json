@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Validation mode for quality checks: `Quick` for lightweight structural/HTML checks,\nor `Strict` for full source grounding and editorial review checks.",
+  "enum": [
+    "quick",
+    "strict"
+  ],
+  "title": "QualityMode",
+  "type": "string"
+}

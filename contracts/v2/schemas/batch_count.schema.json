@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "cloze_indices": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cloze_notes": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "excess": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ext_batch_suggested": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "qa_cards": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "total": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "within_limit": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "qa_cards",
+    "cloze_notes",
+    "cloze_indices",
+    "total",
+    "within_limit",
+    "excess"
+  ],
+  "title": "BatchCount",
+  "type": "object"
+}

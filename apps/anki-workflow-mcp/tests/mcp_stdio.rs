@@ -183,17 +183,14 @@ fn extract_tool_payload(response: &Value) -> Value {
 }
 
 fn assert_typed_objects_deny_additional_properties(schema: &Value, path: &str) {
-    // `cards_compile_drafts.properties.drafts.items` exposes `RawCardDraft` for client documentation,
-    // while `normalize_draft` intentionally tolerates unknown/alias keys on legacy card drafts.
-    if path.starts_with("cards_compile_drafts.properties.drafts.items") {
-        return;
-    }
-
     let Some(obj) = schema.as_object() else {
         return;
     };
 
-    if obj.contains_key("properties") {
+    if obj.contains_key("properties")
+        && !path.ends_with(".properties.draft")
+        && !path.ends_with(".properties.updates")
+    {
         assert_eq!(
             obj.get("additionalProperties"),
             Some(&Value::Bool(false)),
@@ -220,6 +217,17 @@ fn assert_typed_objects_deny_additional_properties(schema: &Value, path: &str) {
                 assert_typed_objects_deny_additional_properties(
                     sub,
                     &format!("{path}.{combinator}[{idx}]"),
+                );
+            }
+        }
+    }
+
+    for defs_key in ["$defs", "definitions"] {
+        if let Some(defs) = obj.get(defs_key).and_then(Value::as_object) {
+            for (key, def_schema) in defs {
+                assert_typed_objects_deny_additional_properties(
+                    def_schema,
+                    &format!("{path}.{defs_key}.{key}"),
                 );
             }
         }
@@ -272,7 +280,7 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     // 2. notifications/initialized
     client.notify("notifications/initialized", None);
 
-    // 3. tools/list: exact 6 tools and strict schemas
+    // 3. tools/list: exact 7 tools and strict schemas
     let list_resp = client.request(2, "tools/list", None);
     assert!(
         list_resp.get("error").is_none(),
@@ -281,7 +289,7 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     let tools = list_resp["result"]["tools"]
         .as_array()
         .expect("result.tools must be an array");
-    assert_eq!(tools.len(), 6, "expected exactly 6 MCP tools");
+    assert_eq!(tools.len(), 7, "expected exactly 7 MCP tools");
 
     let actual_names: BTreeSet<String> = tools
         .iter()
@@ -299,6 +307,7 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         "quality_evaluate",
         "batch_patch_draft",
         "generation_contract_get",
+        "export_reviewed_files",
     ]
     .into_iter()
     .map(str::to_string)
@@ -321,9 +330,10 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         assert_typed_objects_deny_additional_properties(schema, name);
 
         let ann = &tool["annotations"];
+        let expected_read_only = name != "export_reviewed_files";
         assert_eq!(
             ann.get("readOnlyHint"),
-            Some(&json!(true)),
+            Some(&json!(expected_read_only)),
             "{name} readOnlyHint"
         );
         assert_eq!(
@@ -610,6 +620,75 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     assert_eq!(eval_pass["covered_obligation_count"], json!(1));
     assert_eq!(eval_pass["export_authorized"], json!(false));
     assert_eq!(eval_pass["clinical_correctness_certified"], json!(false));
+    let receipt_hash = anki_workflow_mcp::export::compute_receipt_hash(&qa_csv, &cloze_csv);
+
+    // 8b. export_reviewed_files over stdio (positive export + idempotent replay + negative non-PASS)
+    let export_tmp = tempfile::tempdir().expect("tempdir for export_reviewed_files");
+    let export_dir_str = export_tmp.path().to_string_lossy().to_string();
+    let export_ok_resp = client.request(
+        72,
+        "tools/call",
+        Some(json!({
+            "name": "export_reviewed_files",
+            "arguments": {
+                "deck_dir": export_dir_str,
+                "batch_id": "20261120_stdio_test",
+                "topic_slug": "stdio_sintetico",
+                "qa_csv": qa_csv,
+                "cloze_csv": cloze_csv,
+                "receipt_hash": receipt_hash,
+                "evaluation_verdict": "PASS"
+            }
+        })),
+    );
+    assert_ne!(
+        export_ok_resp["result"].get("isError"),
+        Some(&json!(true)),
+        "export_reviewed_files should succeed: {export_ok_resp}"
+    );
+    let export_ok = extract_tool_payload(&export_ok_resp);
+    assert_eq!(export_ok["status"], json!("EXPORTED"));
+
+    let export_replay_resp = client.request(
+        73,
+        "tools/call",
+        Some(json!({
+            "name": "export_reviewed_files",
+            "arguments": {
+                "deck_dir": export_dir_str,
+                "batch_id": "20261120_stdio_test",
+                "topic_slug": "stdio_sintetico",
+                "qa_csv": qa_csv,
+                "cloze_csv": cloze_csv,
+                "receipt_hash": receipt_hash,
+                "evaluation_verdict": "PASS"
+            }
+        })),
+    );
+    assert_ne!(
+        export_replay_resp["result"].get("isError"),
+        Some(&json!(true))
+    );
+    let export_replay = extract_tool_payload(&export_replay_resp);
+    assert_eq!(export_replay["status"], json!("ALREADY_EXPORTED"));
+
+    let export_fail_resp = client.request(
+        74,
+        "tools/call",
+        Some(json!({
+            "name": "export_reviewed_files",
+            "arguments": {
+                "deck_dir": export_dir_str,
+                "batch_id": "20261120_stdio_fail",
+                "topic_slug": "stdio_fail",
+                "qa_csv": qa_csv,
+                "cloze_csv": cloze_csv,
+                "receipt_hash": receipt_hash,
+                "evaluation_verdict": "FAIL"
+            }
+        })),
+    );
+    assert_eq!(export_fail_resp["result"]["isError"], json!(true));
 
     // 9. Unknown top-level and nested argument rejection => isError: true
     let bad_contract_resp = client.request(
@@ -700,7 +779,7 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     assert_eq!(vios[0]["code"], json!("INVALID_SOURCE_ROW"));
     assert_eq!(vios[1]["code"], json!("INVALID_CLOZE_INDEX"));
 
-    // 10. Unknown tool name => MCP method/tool not found (-32601)
+    // 10. Unknown tool name => MCP invalid params (-32602)
     let unknown_tool_resp = client.request(
         10,
         "tools/call",
@@ -711,8 +790,8 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     );
     assert_eq!(
         unknown_tool_resp["error"]["code"],
-        json!(-32601),
-        "unknown tool must return JSON-RPC METHOD_NOT_FOUND (-32601): {unknown_tool_resp}"
+        json!(-32602),
+        "unknown tool must return JSON-RPC INVALID_PARAMS (-32602): {unknown_tool_resp}"
     );
 
     // 11. Session remains usable after malformed / unknown calls

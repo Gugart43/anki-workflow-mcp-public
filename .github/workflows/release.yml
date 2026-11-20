@@ -5,37 +5,70 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   verify-version:
-    name: Verify tag matches Cargo.toml
+    name: Verify tag, Cargo.toml, and package.json
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check Cargo.toml version and clean tree
+      - name: Check Cargo.toml, package.json, optionalDependencies, and clean tree
         run: |
+          set -euo pipefail
           TAG_VER="${GITHUB_REF_NAME#v}"
           CARGO_VER="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
-          echo "Tag: $TAG_VER | Cargo.toml: $CARGO_VER"
+          PKG_VER="$(node -p "require('./npm/anki-workflow-mcp/package.json').version")"
+          echo "Tag: $TAG_VER | Cargo.toml: $CARGO_VER | package.json: $PKG_VER"
           test "$TAG_VER" = "$CARGO_VER"
+          test "$TAG_VER" = "$PKG_VER"
+          node -e '
+            const pkg = require("./npm/anki-workflow-mcp/package.json");
+            const expected = process.argv[1];
+            const required = [
+              "@gugart43/anki-workflow-mcp-linux-x64-gnu",
+              "@gugart43/anki-workflow-mcp-linux-arm64-gnu",
+              "@gugart43/anki-workflow-mcp-win32-x64",
+              "@gugart43/anki-workflow-mcp-darwin-arm64",
+              "@gugart43/anki-workflow-mcp-darwin-x64",
+            ];
+            if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
+              throw new Error("Main package must have zero dependencies");
+            }
+            if (pkg.scripts && pkg.scripts.postinstall) {
+              throw new Error("Main package must not define postinstall");
+            }
+            for (const dep of required) {
+              const actual = pkg.optionalDependencies?.[dep];
+              if (actual !== expected) {
+                throw new Error(`optionalDependencies[${dep}] = ${actual}, expected ${expected}`);
+              }
+            }
+          ' "$TAG_VER"
           test -z "$(git status --porcelain)"
 
   build:
     name: Build (${{ matrix.target }})
     needs: [verify-version]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            ext: ""
+            archive: tar.gz
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
             ext: ""
             archive: tar.gz
           - os: windows-latest
@@ -57,12 +90,12 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@400e7407cfd7a091e5fbb6afec01ec146c432b7c # v2.7.7
 
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }} -p anki-workflow-mcp
@@ -71,6 +104,7 @@ jobs:
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
+          set -euo pipefail
           ASSET="anki-workflow-mcp-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
           tar -czf "$ASSET" -C "target/${{ matrix.target }}/release" "anki-workflow-mcp${{ matrix.ext }}"
           echo "ASSET=$ASSET" >> "$GITHUB_ENV"
@@ -84,29 +118,219 @@ jobs:
           echo "ASSET=$asset" >> $env:GITHUB_ENV
 
       - name: Upload release artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: release-${{ matrix.target }}
           path: ${{ env.ASSET }}
           retention-days: 1
 
-  publish:
-    name: Publish GitHub Release
-    needs: [build]
+  build-npm:
+    name: Stage and smoke-test npm packages
+    needs: [verify-version, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download all release artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: release-*
           path: dist
           merge-multiple: true
 
-      - name: Generate SHA256SUMS.txt
+      - name: Stage platform and main npm packages
+        run: |
+          set -euo pipefail
+          node npm/scripts/stage-platform-packages.mjs \
+            --version "${GITHUB_REF_NAME#v}" \
+            --dist-dir dist \
+            --out-dir npm-stage
+
+      - name: Pack tarballs and run Linux smoke test
+        run: |
+          set -euo pipefail
+          mkdir -p npm-tarballs smoke-test
+          for dir in \
+            npm-stage/platforms/linux-x64-gnu \
+            npm-stage/platforms/linux-arm64-gnu \
+            npm-stage/platforms/win32-x64 \
+            npm-stage/platforms/darwin-arm64 \
+            npm-stage/platforms/darwin-x64 \
+            npm-stage/main; do
+            npm pack "$dir" --pack-destination npm-tarballs
+          done
+
+          VER="${GITHUB_REF_NAME#v}"
+          LINUX_TGZ="$(realpath "npm-tarballs/gugart43-anki-workflow-mcp-linux-x64-gnu-${VER}.tgz")"
+          MAIN_TGZ="$(realpath "npm-tarballs/gugart43-anki-workflow-mcp-${VER}.tgz")"
+
+          (
+            cd smoke-test
+            npm init -y >/dev/null
+            npm install --ignore-scripts --no-audit --no-fund "$LINUX_TGZ" "$MAIN_TGZ"
+          )
+
+          # 1) MCP initialize over stdio + strict stdout JSON hygiene
+          INIT_REQ='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci-smoke","version":"0.1.0"}}}'
+          STDOUT_OUT="$(printf '%s\n' "$INIT_REQ" | timeout 10s ./smoke-test/node_modules/.bin/anki-workflow-mcp serve 2>smoke-test/stderr.log || true)"
+          node -e '
+            const raw = process.argv[1].trim();
+            if (!raw) throw new Error("Empty stdout from MCP initialize");
+            const firstLine = raw.split(/\r?\n/)[0];
+            const msg = JSON.parse(firstLine);
+            if (msg.jsonrpc !== "2.0" || msg.id !== 1) {
+              throw new Error(`Unexpected JSON-RPC response: ${firstLine}`);
+            }
+          ' "$STDOUT_OUT"
+
+          # 2) ANKI_WORKFLOW_MCP_BIN override
+          OVERRIDE_BIN="$(realpath npm-stage/platforms/linux-x64-gnu/bin/anki-workflow-mcp)"
+          OVERRIDE_OUT="$(printf '%s\n' "$INIT_REQ" | ANKI_WORKFLOW_MCP_BIN="$OVERRIDE_BIN" timeout 10s ./smoke-test/node_modules/.bin/anki-workflow-mcp serve 2>/dev/null || true)"
+          node -e '
+            const msg = JSON.parse(process.argv[1].trim().split(/\r?\n/)[0]);
+            if (msg.jsonrpc !== "2.0" || msg.id !== 1) {
+              throw new Error("Override binary failed MCP initialize");
+            }
+          ' "$OVERRIDE_OUT"
+
+          # 3) Tampered checksums.json must fail closed with empty stdout
+          CHECKSUMS_FILE="smoke-test/node_modules/@gugart43/anki-workflow-mcp/checksums.json"
+          node -e '
+            const fs = require("node:fs");
+            const p = process.argv[1];
+            const data = JSON.parse(fs.readFileSync(p, "utf8"));
+            data.packages["@gugart43/anki-workflow-mcp-linux-x64-gnu"].sha256 = "0".repeat(64);
+            fs.writeFileSync(p, JSON.stringify(data, null, 2));
+          ' "$CHECKSUMS_FILE"
+
+          set +e
+          TAMPER_OUT="$(./smoke-test/node_modules/.bin/anki-workflow-mcp serve 2>smoke-test/tamper.err)"
+          TAMPER_CODE=$?
+          set -e
+          test "$TAMPER_CODE" -ne 0
+          test -z "$TAMPER_OUT"
+          grep -q "SHA-256 integrity mismatch" smoke-test/tamper.err
+
+      - name: Upload staged npm packages
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: npm-stage
+          path: npm-stage
+          retention-days: 1
+
+  publish-github:
+    name: Publish GitHub Release
+    needs: [verify-version, build, build-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify all 5 release assets and generate SHA256SUMS.txt
         working-directory: dist
-        run: sha256sum anki-workflow-mcp-* > SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          ASSETS=(
+            "anki-workflow-mcp-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
+            "anki-workflow-mcp-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz"
+            "anki-workflow-mcp-${GITHUB_REF_NAME}-x86_64-pc-windows-msvc.zip"
+            "anki-workflow-mcp-${GITHUB_REF_NAME}-aarch64-apple-darwin.tar.gz"
+            "anki-workflow-mcp-${GITHUB_REF_NAME}-x86_64-apple-darwin.tar.gz"
+          )
+          for asset in "${ASSETS[@]}"; do
+            test -s "$asset"
+          done
+          sha256sum "${ASSETS[@]}" > SHA256SUMS.txt
+          test "$(wc -l < SHA256SUMS.txt)" -eq 5
+          cat SHA256SUMS.txt
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           generate_release_notes: true
           files: dist/*
+
+  publish-npm:
+    name: Publish npm packages (Trusted Publishing OIDC)
+    needs: [build-npm, publish-github]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Setup Node.js for npm Trusted Publishing
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Ensure npm CLI >= 11.5.1
+        run: |
+          set -euo pipefail
+          node -e '
+            const { execFileSync } = require("node:child_process");
+            const ver = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+            const [maj, min, pat] = ver.split(".").map(Number);
+            const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+            console.log(`npm version: ${ver}`);
+            if (!ok) {
+              console.error(`npm CLI >= 11.5.1 is required for OIDC Trusted Publishing, got ${ver}`);
+              process.exit(1);
+            }
+          '
+          npm --version
+
+      - name: Download staged npm packages
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: npm-stage
+          path: npm-stage
+
+      - name: Publish 5 platform packages before main package
+        run: |
+          set -euo pipefail
+          for dir in \
+            npm-stage/platforms/linux-x64-gnu \
+            npm-stage/platforms/linux-arm64-gnu \
+            npm-stage/platforms/win32-x64 \
+            npm-stage/platforms/darwin-arm64 \
+            npm-stage/platforms/darwin-x64; do
+            PKG="$(node -p "require('./${dir}/package.json').name")"
+            VER="$(node -p "require('./${dir}/package.json').version")"
+            if npm view "${PKG}@${VER}" version >/dev/null 2>&1; then
+              echo "Already published: ${PKG}@${VER}, skipping."
+              continue
+            fi
+            echo "Publishing ${PKG}@${VER} from $dir ..."
+            npm publish "$dir" --provenance --access public
+          done
+
+      - name: Publish main launcher package
+        run: |
+          set -euo pipefail
+          PKG="$(node -p "require('./npm-stage/main/package.json').name")"
+          VER="$(node -p "require('./npm-stage/main/package.json').version")"
+          if npm view "${PKG}@${VER}" version >/dev/null 2>&1; then
+            echo "Already published: ${PKG}@${VER}, skipping."
+          else
+            echo "Publishing ${PKG}@${VER} from npm-stage/main ..."
+            npm publish npm-stage/main --provenance --access public
+          fi

@@ -2,12 +2,13 @@ use std::future::Future;
 use std::sync::{Arc, LazyLock};
 
 use anki_domain::{EvidenceScope, ReviewVerdict};
-use anki_validate::draft_normalize::RawCardDraft;
+use anki_validate::draft_normalize::StrictRawCardDraft;
 use anki_validate::quality::{
-    QualityBinding, QualityDimensions, QualityEvidence, QualityInput, QualityObligation,
-    QualityPrepareInput, QualityReview, QualitySource, evaluate_quality, prepare_quality_input,
+    QualityBinding, QualityDimensions, QualityEvidence, QualityInput, QualityMode,
+    QualityObligation, QualityPrepareInput, QualityReview, QualitySource, evaluate_quality,
+    prepare_quality_input,
 };
-use anki_validate::{compile_drafts, patch_draft, review_batch_information};
+use anki_validate::{compile_drafts_strict, patch_draft, review_batch_information};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode, Implementation, JsonObject,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -20,17 +21,22 @@ use schemars::generate::SchemaSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+pub use crate::export::ExportReviewedFilesArgs;
+use crate::export::{ExportError, ExportReviewedFilesResult, execute_export_reviewed_files};
+
 const SERVER_INSTRUCTIONS: &str = "\
-Stateless MCP stdio validation and quality evaluation server for Anki QA/Cloze batches. \
+MCP stdio validation, quality evaluation, and transactional export server for Anki QA/Cloze batches (7 tools). \
 Call `generation_contract_get` first with `{}` to read the full `quality_v1` workflow, \
 per-retrieval rubric, field ordering, repair protocol, and limitations. \
 Use `cards_compile_drafts` to compile normalized drafts into canonical QA/Cloze CSVs, \
 `review_batch_information` for per-card information profiles (`no_count_only_limit: true`, no fixed 20-card ceiling), \
 `quality_prepare` to build a snapshot hash and per-retrieval inventory, \
 `quality_evaluate` to evaluate bindings and independent editorial reviews against that snapshot, \
-and `batch_patch_draft` for pure in-memory `{draft, updates} -> {card}` patching \
-(distinct from the path-based Python staging file API). \
-Technical validation or `PASS` is never proof of clinical truth or permission to export; \
+`batch_patch_draft` for pure in-memory `{draft, updates} -> {card}` patching \
+(distinct from the path-based Python staging file API), \
+and `export_reviewed_files` for local transactional CSV export with cross-process locking and idempotent state-ledger persistence \
+(requires exact `PASS` verdict and verified SHA-256 `receipt_hash`). \
+Technical validation or `PASS` is never proof of clinical truth; \
 `INCOMPLETE` never authorizes export.";
 
 #[derive(Debug, Clone, Default)]
@@ -44,15 +50,16 @@ impl AnkiQualityMcpServer {
 
 pub async fn run_stdio() -> Result<(), String> {
     let server = AnkiQualityMcpServer::new();
-    let running = server
-        .serve(rmcp::transport::stdio())
-        .await
-        .map_err(|err| {
-            format!(
+    let running = match server.serve(rmcp::transport::stdio()).await {
+        Ok(running) => running,
+        Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
+        Err(err) => {
+            return Err(format!(
                 "MCP stdio initialization failed: {}",
                 sanitize_error_text(&err.to_string())
-            )
-        })?;
+            ));
+        }
+    };
 
     running.waiting().await.map_err(|err| {
         format!(
@@ -64,65 +71,66 @@ pub async fn run_stdio() -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct InputViolation {
-    code: &'static str,
-    path: String,
-    message: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct InputViolation {
+    pub code: &'static str,
+    pub path: String,
+    pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ToolErrorPayload {
-    error: String,
-    code: &'static str,
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct ToolErrorPayload {
+    pub error: String,
+    pub code: &'static str,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    violations: Vec<InputViolation>,
+    pub violations: Vec<InputViolation>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct EmptyArgs {}
+pub struct EmptyArgs {}
 
 fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct CompileDraftsArgs {
+pub struct CompileDraftsArgs {
     /// List of card draft objects (QA or Cloze) to normalize and compile.
-    #[schemars(with = "Vec<RawCardDraft>")]
-    drafts: Vec<Value>,
+    #[schemars(with = "Vec<StrictRawCardDraft>")]
+    pub drafts: Vec<Value>,
     #[serde(default = "default_true")]
-    auto_renumber_cloze: bool,
+    pub auto_renumber_cloze: bool,
     #[serde(default = "default_true")]
-    auto_purge_id_leaks: bool,
+    pub auto_purge_id_leaks: bool,
     #[serde(default)]
-    default_campo_estudo: String,
+    pub default_campo_estudo: String,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReviewBatchInformationArgs {
-    qa_csv: String,
-    cloze_csv: String,
+pub struct ReviewBatchInformationArgs {
+    pub qa_csv: String,
+    pub cloze_csv: String,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct BatchPatchDraftArgs {
-    draft: Map<String, Value>,
-    updates: Map<String, Value>,
+pub struct BatchPatchDraftArgs {
+    pub draft: Map<String, Value>,
+    pub updates: Map<String, Value>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-enum StrictNoteTypeArg {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub enum StrictNoteTypeArg {
     QA,
+    #[serde(alias = "CLOZE")]
     CL,
 }
 
 impl StrictNoteTypeArg {
-    const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::QA => "QA",
             Self::CL => "CL",
@@ -130,14 +138,14 @@ impl StrictNoteTypeArg {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualitySourceArg {
-    id: String,
-    title: String,
-    version: String,
-    locator: String,
-    text: String,
+pub struct QualitySourceArg {
+    pub id: String,
+    pub title: String,
+    pub version: String,
+    pub locator: String,
+    pub text: String,
 }
 
 impl From<QualitySourceArg> for QualitySource {
@@ -152,12 +160,12 @@ impl From<QualitySourceArg> for QualitySource {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityObligationArg {
-    id: String,
-    description: String,
-    source_ids: Vec<String>,
+pub struct QualityObligationArg {
+    pub id: String,
+    pub description: String,
+    pub source_ids: Vec<String>,
 }
 
 impl From<QualityObligationArg> for QualityObligation {
@@ -170,13 +178,13 @@ impl From<QualityObligationArg> for QualityObligation {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityEvidenceArg {
-    source_id: String,
-    quote: String,
-    locator: String,
-    scope: EvidenceScope,
+pub struct QualityEvidenceArg {
+    pub source_id: String,
+    pub quote: String,
+    pub locator: String,
+    pub scope: EvidenceScope,
 }
 
 impl From<QualityEvidenceArg> for QualityEvidence {
@@ -190,19 +198,21 @@ impl From<QualityEvidenceArg> for QualityEvidence {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityBindingArg {
-    note_type: StrictNoteTypeArg,
-    source_row: i64,
+pub struct QualityBindingArg {
+    pub note_type: StrictNoteTypeArg,
+    #[schemars(range(min = 2))]
+    pub source_row: i64,
     #[serde(default)]
-    cloze_index: Option<i64>,
-    obligation_ids: Vec<String>,
-    evidence: Vec<QualityEvidenceArg>,
+    #[schemars(range(min = 1))]
+    pub cloze_index: Option<i64>,
+    pub obligation_ids: Vec<String>,
+    pub evidence: Vec<QualityEvidenceArg>,
 }
 
 impl QualityBindingArg {
-    fn into_binding(self) -> QualityBinding {
+    pub fn into_binding(self) -> QualityBinding {
         QualityBinding {
             note_type: self.note_type.as_str().to_owned(),
             source_row: self.source_row as usize,
@@ -213,16 +223,16 @@ impl QualityBindingArg {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReviewDimensionsArg {
-    source_fidelity: bool,
-    atomic_retrieval: bool,
-    context_sufficient: bool,
-    no_answer_leak: bool,
-    clinically_relevant: bool,
-    notes_appropriate: bool,
-    media_appropriate: bool,
+pub struct ReviewDimensionsArg {
+    pub source_fidelity: bool,
+    pub atomic_retrieval: bool,
+    pub context_sufficient: bool,
+    pub no_answer_leak: bool,
+    pub clinically_relevant: bool,
+    pub notes_appropriate: bool,
+    pub media_appropriate: bool,
 }
 
 impl From<ReviewDimensionsArg> for QualityDimensions {
@@ -239,22 +249,24 @@ impl From<ReviewDimensionsArg> for QualityDimensions {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityReviewArg {
-    note_type: StrictNoteTypeArg,
-    source_row: i64,
+pub struct QualityReviewArg {
+    pub note_type: StrictNoteTypeArg,
+    #[schemars(range(min = 2))]
+    pub source_row: i64,
     #[serde(default)]
-    cloze_index: Option<i64>,
-    snapshot_hash: String,
-    reviewer: String,
-    verdict: ReviewVerdict,
-    rationale: String,
-    dimensions: ReviewDimensionsArg,
+    #[schemars(range(min = 1))]
+    pub cloze_index: Option<i64>,
+    pub snapshot_hash: String,
+    pub reviewer: String,
+    pub verdict: ReviewVerdict,
+    pub rationale: String,
+    pub dimensions: ReviewDimensionsArg,
 }
 
 impl QualityReviewArg {
-    fn into_review(self) -> QualityReview {
+    pub fn into_review(self) -> QualityReview {
         QualityReview {
             note_type: self.note_type.as_str().to_owned(),
             source_row: self.source_row as usize,
@@ -268,43 +280,75 @@ impl QualityReviewArg {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+fn validate_retrieval_locator(
+    note_type: StrictNoteTypeArg,
+    source_row: i64,
+    cloze_index: Option<i64>,
+    path_prefix: &str,
+    violations: &mut Vec<InputViolation>,
+) {
+    if source_row < 2 {
+        violations.push(InputViolation {
+            code: "INVALID_SOURCE_ROW",
+            path: format!("{path_prefix}.source_row"),
+            message: format!("{path_prefix}.source_row must be an integer >= 2, got {source_row}"),
+        });
+    }
+    match (note_type, cloze_index) {
+        (StrictNoteTypeArg::QA, Some(cloze_idx)) => {
+            violations.push(InputViolation {
+                code: "INVALID_CLOZE_INDEX",
+                path: format!("{path_prefix}.cloze_index"),
+                message: format!(
+                    "{path_prefix}.cloze_index must be null for QA note_type, got {cloze_idx}"
+                ),
+            });
+        }
+        (StrictNoteTypeArg::CL, None) => {
+            violations.push(InputViolation {
+                code: "MISSING_CLOZE_INDEX",
+                path: format!("{path_prefix}.cloze_index"),
+                message: format!("{path_prefix}.cloze_index must be provided for CL note_type"),
+            });
+        }
+        (StrictNoteTypeArg::CL, Some(cloze_idx)) if cloze_idx < 1 => {
+            violations.push(InputViolation {
+                code: "INVALID_CLOZE_INDEX",
+                path: format!("{path_prefix}.cloze_index"),
+                message: format!(
+                    "{path_prefix}.cloze_index must be an integer >= 1, got {cloze_idx}"
+                ),
+            });
+        }
+        _ => {}
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityPrepareArgs {
-    qa_csv: String,
-    cloze_csv: String,
+pub struct QualityPrepareArgs {
     #[serde(default)]
-    sources: Vec<QualitySourceArg>,
+    pub mode: QualityMode,
+    pub qa_csv: String,
+    pub cloze_csv: String,
     #[serde(default)]
-    obligations: Vec<QualityObligationArg>,
+    pub sources: Vec<QualitySourceArg>,
     #[serde(default)]
-    bindings: Vec<QualityBindingArg>,
+    pub obligations: Vec<QualityObligationArg>,
+    #[serde(default)]
+    pub bindings: Vec<QualityBindingArg>,
 }
 
 impl QualityPrepareArgs {
     fn collect_range_violations(&self, violations: &mut Vec<InputViolation>) {
         for (idx, binding) in self.bindings.iter().enumerate() {
-            if binding.source_row < 2 {
-                violations.push(InputViolation {
-                    code: "INVALID_SOURCE_ROW",
-                    path: format!("bindings[{idx}].source_row"),
-                    message: format!(
-                        "bindings[{idx}].source_row must be an integer >= 2, got {}",
-                        binding.source_row
-                    ),
-                });
-            }
-            if let Some(cloze_idx) = binding.cloze_index
-                && cloze_idx < 1
-            {
-                violations.push(InputViolation {
-                    code: "INVALID_CLOZE_INDEX",
-                    path: format!("bindings[{idx}].cloze_index"),
-                    message: format!(
-                        "bindings[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
-                    ),
-                });
-            }
+            validate_retrieval_locator(
+                binding.note_type,
+                binding.source_row,
+                binding.cloze_index,
+                &format!("bindings[{idx}]"),
+                violations,
+            );
         }
     }
 
@@ -312,6 +356,7 @@ impl QualityPrepareArgs {
         QualityPrepareInput {
             qa_csv: self.qa_csv,
             cloze_csv: self.cloze_csv,
+            mode: self.mode,
             sources: self.sources.into_iter().map(Into::into).collect(),
             obligations: self.obligations.into_iter().map(Into::into).collect(),
             bindings: self
@@ -323,69 +368,43 @@ impl QualityPrepareArgs {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct QualityEvaluateArgs {
-    qa_csv: String,
-    cloze_csv: String,
+pub struct QualityEvaluateArgs {
     #[serde(default)]
-    sources: Vec<QualitySourceArg>,
+    pub mode: QualityMode,
+    pub qa_csv: String,
+    pub cloze_csv: String,
     #[serde(default)]
-    obligations: Vec<QualityObligationArg>,
+    pub sources: Vec<QualitySourceArg>,
     #[serde(default)]
-    bindings: Vec<QualityBindingArg>,
+    pub obligations: Vec<QualityObligationArg>,
     #[serde(default)]
-    reviews: Vec<QualityReviewArg>,
+    pub bindings: Vec<QualityBindingArg>,
+    #[serde(default)]
+    pub reviews: Vec<QualityReviewArg>,
 }
 
 impl QualityEvaluateArgs {
     fn collect_range_violations(&self, violations: &mut Vec<InputViolation>) {
         for (idx, binding) in self.bindings.iter().enumerate() {
-            if binding.source_row < 2 {
-                violations.push(InputViolation {
-                    code: "INVALID_SOURCE_ROW",
-                    path: format!("bindings[{idx}].source_row"),
-                    message: format!(
-                        "bindings[{idx}].source_row must be an integer >= 2, got {}",
-                        binding.source_row
-                    ),
-                });
-            }
-            if let Some(cloze_idx) = binding.cloze_index
-                && cloze_idx < 1
-            {
-                violations.push(InputViolation {
-                    code: "INVALID_CLOZE_INDEX",
-                    path: format!("bindings[{idx}].cloze_index"),
-                    message: format!(
-                        "bindings[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
-                    ),
-                });
-            }
+            validate_retrieval_locator(
+                binding.note_type,
+                binding.source_row,
+                binding.cloze_index,
+                &format!("bindings[{idx}]"),
+                violations,
+            );
         }
 
         for (idx, review) in self.reviews.iter().enumerate() {
-            if review.source_row < 2 {
-                violations.push(InputViolation {
-                    code: "INVALID_SOURCE_ROW",
-                    path: format!("reviews[{idx}].source_row"),
-                    message: format!(
-                        "reviews[{idx}].source_row must be an integer >= 2, got {}",
-                        review.source_row
-                    ),
-                });
-            }
-            if let Some(cloze_idx) = review.cloze_index
-                && cloze_idx < 1
-            {
-                violations.push(InputViolation {
-                    code: "INVALID_CLOZE_INDEX",
-                    path: format!("reviews[{idx}].cloze_index"),
-                    message: format!(
-                        "reviews[{idx}].cloze_index must be null or an integer >= 1, got {cloze_idx}"
-                    ),
-                });
-            }
+            validate_retrieval_locator(
+                review.note_type,
+                review.source_row,
+                review.cloze_index,
+                &format!("reviews[{idx}]"),
+                violations,
+            );
         }
     }
 
@@ -393,6 +412,7 @@ impl QualityEvaluateArgs {
         QualityInput {
             qa_csv: self.qa_csv,
             cloze_csv: self.cloze_csv,
+            mode: self.mode,
             sources: self.sources.into_iter().map(Into::into).collect(),
             obligations: self.obligations.into_iter().map(Into::into).collect(),
             bindings: self
@@ -530,6 +550,19 @@ fn init_tools() -> Vec<Tool> {
     )
     .with_annotations(ann);
 
+    let export_reviewed_files = Tool::new(
+        "export_reviewed_files",
+        "Atomically export reviewed QA/Cloze CSV files to deck export directory after validating receipt hash, verdict PASS, CSV format, and HTML safety. Idempotent on identical payload; records exported state.",
+        schema_for_args::<ExportReviewedFilesArgs>(),
+    )
+    .with_annotations(
+        ToolAnnotations::new()
+            .read_only(false)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    );
+
     vec![
         cards_compile_drafts,
         review_batch_information,
@@ -537,6 +570,7 @@ fn init_tools() -> Vec<Tool> {
         quality_evaluate,
         batch_patch_draft,
         generation_contract_get,
+        export_reviewed_files,
     ]
 }
 
@@ -649,9 +683,9 @@ fn generation_contract_payload() -> Value {
             ]
         },
         "limitations": [
-            "Pure stateless stdio binary: no disk persistence, no manifesto/SQLite state, no network calls, and no `.apkg`/file export.",
+            "Local stdio binary exposing 7 tools: 6 pure in-memory validation/evaluation/contract tools and `export_reviewed_files` for local transactional CSV persistence (`exports/` + `.anki-workflow-export-state.json` ledger with cross-process locking); no SQLite/manifesto database, no network calls, and no `.apkg` packaging.",
             "`batch_patch_draft` operates purely in memory (`{draft, updates} -> {card}`) and is NOT the path-based Python staging file API.",
-            "Technical `PASS` from compilation, structural checks, or information review is NOT proof of clinical truth, source fidelity, or permission to export.",
+            "Technical `PASS` from compilation, structural checks, or information review is NOT proof of clinical truth or source fidelity; `export_reviewed_files` still requires exact `PASS` verdict, valid SHA-256 `receipt_hash`, and fail-closed CSV/HTML revalidation.",
             "`INCOMPLETE` means required inputs, bindings, or independent reviews are missing or stale and NEVER authorizes export.",
             "No invented medical examples or private deck data are embedded in this contract."
         ],
@@ -695,9 +729,44 @@ impl ServerHandler for AnkiQualityMcpServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + Send + '_ {
-        let result = dispatch_tool_call(request);
-        std::future::ready(result)
+        dispatch_tool_call_async(request)
     }
+}
+
+fn map_export_result(result: Result<ExportReviewedFilesResult, ExportError>) -> CallToolResponse {
+    match result {
+        Ok(res) => match serde_json::to_value(&res) {
+            Ok(val) => tool_ok(val),
+            Err(err) => tool_error(format!("Failed to serialize export result: {err}")),
+        },
+        Err(err) => tool_error_payload(ToolErrorPayload {
+            error: sanitize_error_text(&err.message),
+            code: err.code,
+            violations: Vec::new(),
+        }),
+    }
+}
+
+async fn dispatch_tool_call_async(
+    request: CallToolRequestParams,
+) -> Result<CallToolResponse, ErrorData> {
+    if request.name.as_ref() == "export_reviewed_files" {
+        let args: ExportReviewedFilesArgs = match parse_args(request.arguments) {
+            Ok(parsed) => parsed,
+            Err(msg) => return Ok(tool_error(msg)),
+        };
+        let export_result =
+            tokio::task::spawn_blocking(move || execute_export_reviewed_files(&args)).await;
+        return Ok(match export_result {
+            Ok(res) => map_export_result(res),
+            Err(join_err) => tool_error_payload(ToolErrorPayload {
+                error: sanitize_error_text(&format!("Export blocking task failed: {join_err}")),
+                code: "EXPORT.TASK_JOIN_ERROR",
+                violations: Vec::new(),
+            }),
+        });
+    }
+    dispatch_tool_call(request)
 }
 
 fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
@@ -709,7 +778,7 @@ fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse
                 Ok(parsed) => parsed,
                 Err(msg) => return Ok(tool_error(msg)),
             };
-            match compile_drafts(
+            match compile_drafts_strict(
                 &args.drafts,
                 args.auto_renumber_cloze,
                 args.auto_purge_id_leaks,
@@ -800,8 +869,15 @@ fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse
             }
             Ok(tool_ok(generation_contract_payload()))
         }
+        "export_reviewed_files" => {
+            let args: ExportReviewedFilesArgs = match parse_args(request.arguments) {
+                Ok(parsed) => parsed,
+                Err(msg) => return Ok(tool_error(msg)),
+            };
+            Ok(map_export_result(execute_export_reviewed_files(&args)))
+        }
         unknown => Err(ErrorData::new(
-            ErrorCode::METHOD_NOT_FOUND,
+            ErrorCode::INVALID_PARAMS,
             format!("Unknown tool: {}", sanitize_error_text(unknown)),
             None,
         )),
@@ -844,7 +920,10 @@ mod tests {
         let Some(obj) = schema.as_object() else {
             return;
         };
-        if obj.contains_key("properties") && !path.contains("drafts") {
+        if obj.contains_key("properties")
+            && !path.ends_with(".properties.draft")
+            && !path.ends_with(".properties.updates")
+        {
             assert_eq!(
                 obj.get("additionalProperties"),
                 Some(&Value::Bool(false)),
@@ -859,12 +938,26 @@ mod tests {
         if let Some(items) = obj.get("items") {
             assert_typed_schemas_strict(items, &format!("{path}.items"));
         }
+        for combinator in ["anyOf", "oneOf", "allOf"] {
+            if let Some(arr) = obj.get(combinator).and_then(Value::as_array) {
+                for (idx, sub) in arr.iter().enumerate() {
+                    assert_typed_schemas_strict(sub, &format!("{path}.{combinator}[{idx}]"));
+                }
+            }
+        }
+        for defs_key in ["$defs", "definitions"] {
+            if let Some(defs) = obj.get(defs_key).and_then(Value::as_object) {
+                for (k, v) in defs {
+                    assert_typed_schemas_strict(v, &format!("{path}.{defs_key}.{k}"));
+                }
+            }
+        }
     }
 
     #[test]
-    fn exposes_six_tools_with_strict_schemas_and_readonly_annotations() {
+    fn exposes_seven_tools_with_strict_schemas_and_annotations() {
         let tools = build_tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         let names: BTreeSet<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
         let expected: BTreeSet<&str> = [
             "cards_compile_drafts",
@@ -873,6 +966,7 @@ mod tests {
             "quality_evaluate",
             "batch_patch_draft",
             "generation_contract_get",
+            "export_reviewed_files",
         ]
         .into_iter()
         .collect();
@@ -883,9 +977,14 @@ mod tests {
             assert_eq!(schema_val.get("additionalProperties"), Some(&json!(false)));
             assert_typed_schemas_strict(&schema_val, tool.name.as_ref());
             let ann = tool.annotations.as_ref().expect("annotations required");
-            assert_eq!(ann.read_only_hint, Some(true));
+            if tool.name == "export_reviewed_files" {
+                assert_eq!(ann.read_only_hint, Some(false));
+            } else {
+                assert_eq!(ann.read_only_hint, Some(true));
+            }
             assert_eq!(ann.destructive_hint, Some(false));
             assert_eq!(ann.idempotent_hint, Some(true));
+            assert_eq!(ann.open_world_hint, Some(false));
         }
     }
 
@@ -1037,9 +1136,160 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_returns_method_not_found_error() {
+    fn unknown_tool_returns_invalid_params_error() {
         let err = dispatch_tool_call(make_call("does_not_exist", json!({})))
             .expect_err("unknown tool must return protocol error");
-        assert_eq!(err.code, ErrorCode::METHOD_NOT_FOUND);
+        assert_eq!(err.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn cards_compile_drafts_rejects_unknown_draft_fields_and_accepts_aliases() {
+        let bad = dispatch_tool_call(make_call(
+            "cards_compile_drafts",
+            json!({
+                "drafts": [{
+                    "tipo": "QA",
+                    "enunciado_ou_sentenca": "Pergunta?",
+                    "resposta": "Resposta.",
+                    "campo_desconhecido_invalido": "valor"
+                }]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&bad));
+        let payload = extract_error_payload(&bad);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("campo_desconhecido_invalido")
+        );
+
+        let ok = dispatch_tool_call(make_call(
+            "cards_compile_drafts",
+            json!({
+                "drafts": [{
+                    "note_type": "QA",
+                    "pergunta": "Pergunta via alias?",
+                    "resposta": "Resposta via alias.",
+                    "study_field": "Neurologia",
+                    "fonte": "Diretriz 2026",
+                    "tags": ["neuro"]
+                }]
+            }),
+        ))
+        .expect("alias draft should succeed");
+        assert!(!is_error_response(&ok));
+    }
+
+    #[test]
+    fn strict_note_type_accepts_cloze_alias_and_validates_locator_combinations() {
+        let bad_locators = dispatch_tool_call(make_call(
+            "quality_prepare",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "bindings": [
+                    {
+                        "note_type": "QA",
+                        "source_row": 2,
+                        "cloze_index": 1,
+                        "obligation_ids": [],
+                        "evidence": []
+                    },
+                    {
+                        "note_type": "CLOZE",
+                        "source_row": 2,
+                        "obligation_ids": [],
+                        "evidence": []
+                    }
+                ]
+            }),
+        ))
+        .expect("should return range/locator violations");
+        assert!(is_error_response(&bad_locators));
+        let payload = extract_error_payload(&bad_locators);
+        assert_eq!(payload["code"], json!("INVALID_INPUT_RANGES"));
+        let vios = payload["violations"].as_array().expect("violations array");
+        assert_eq!(vios.len(), 2);
+        assert_eq!(vios[0]["code"], json!("INVALID_CLOZE_INDEX"));
+        assert_eq!(vios[1]["code"], json!("MISSING_CLOZE_INDEX"));
+    }
+
+    #[test]
+    fn server_instructions_and_contract_reflect_seven_tools_and_local_export() {
+        assert!(SERVER_INSTRUCTIONS.contains("7 tools"));
+        assert!(SERVER_INSTRUCTIONS.contains("export_reviewed_files"));
+        assert!(SERVER_INSTRUCTIONS.contains("local transactional CSV export"));
+        assert!(!SERVER_INSTRUCTIONS.contains("Stateless MCP stdio"));
+
+        let server = AnkiQualityMcpServer::new();
+        let info = server.get_info();
+        let info_json = serde_json::to_value(&info).expect("serialize server info");
+        assert_eq!(info_json["instructions"], json!(SERVER_INSTRUCTIONS));
+
+        let contract = generation_contract_payload();
+        let limitations = contract["limitations"]
+            .as_array()
+            .expect("limitations array");
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("Local stdio binary exposing 7 tools")
+        }));
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("export_reviewed_files")
+        }));
+        assert!(!limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("Pure stateless stdio binary")
+        }));
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("fail-closed CSV/HTML revalidation")
+        }));
+    }
+
+    #[tokio::test]
+    async fn export_reviewed_files_uses_spawn_blocking_and_sanitizes_error_messages() {
+        let raw_err = ExportError::new(
+            "EXPORT.VALIDATION_FAIL",
+            "Error with\nembedded\r\nnewlines\tand    tabs",
+        );
+        let mapped = map_export_result(Err(raw_err));
+        assert!(is_error_response(&mapped));
+        let payload = extract_error_payload(&mapped);
+        assert_eq!(payload["code"], json!("EXPORT.VALIDATION_FAIL"));
+        assert_eq!(
+            payload["error"],
+            json!("Error with embedded newlines and tabs")
+        );
+
+        let call = make_call(
+            "export_reviewed_files",
+            json!({
+                "deck_dir": "target/test_export_dir",
+                "batch_id": "batch\nwith\r\nnewlines",
+                "qa_csv": "qa",
+                "cloze_csv": "cloze",
+                "receipt_hash": "invalid_hash",
+                "evaluation_verdict": "REVISE"
+            }),
+        );
+        let async_resp = dispatch_tool_call_async(call)
+            .await
+            .expect("dispatch_tool_call_async should complete");
+        assert!(is_error_response(&async_resp));
+        let async_payload = extract_error_payload(&async_resp);
+        assert_eq!(async_payload["code"], json!("EXPORT.INVALID_BATCH_ID"));
+        let err_text = async_payload["error"].as_str().unwrap_or_default();
+        assert!(!err_text.contains('\n'));
+        assert!(!err_text.contains('\r'));
+        assert!(!err_text.contains('\t'));
+        assert!(err_text.contains("batch_id inválido 'batch with newlines'"));
     }
 }

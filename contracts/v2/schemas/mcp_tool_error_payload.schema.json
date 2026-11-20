@@ -1,0 +1,45 @@
+{
+  "$defs": {
+    "InputViolation": {
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "path",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "code": {
+      "type": "string"
+    },
+    "error": {
+      "type": "string"
+    },
+    "violations": {
+      "items": {
+        "$ref": "#/$defs/InputViolation"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "error",
+    "code",
+    "violations"
+  ],
+  "title": "ToolErrorPayload",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "draft": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "updates": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  "required": [
+    "draft",
+    "updates"
+  ],
+  "title": "BatchPatchDraftArgs",
+  "type": "object"
+}

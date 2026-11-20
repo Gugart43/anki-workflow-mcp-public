@@ -38,3 +38,11 @@ target/
 **/*.rs.bk
 *.profraw
 *.profdata
+
+# Node / TypeScript / npm artifacts
+node_modules/
+npm-stage/
+*.tsbuildinfo
+
+# Superpowers orchestration
+.superpowers/

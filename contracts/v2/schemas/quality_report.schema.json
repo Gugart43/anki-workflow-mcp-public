@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "BatchInformationReview": {
+      "properties": {
+        "cards": {
+          "items": {
+            "$ref": "#/$defs/CardInformationReview"
+          },
+          "type": "array"
+        },
+        "cloze_cards": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "qa_cards": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "semantic_review_required": {
+          "type": "boolean"
+        },
+        "total_cards": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "qa_cards",
+        "cloze_cards",
+        "total_cards",
+        "semantic_review_required",
+        "diagnostics",
+        "cards"
+      ],
+      "type": "object"
+    },
+    "CardInformationReview": {
+      "properties": {
+        "candidate_item_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "candidate_items": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cloze_index": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diagnostics": {
+          "items": {
+            "$ref": "#/$defs/Diagnostic"
+          },
+          "type": "array"
+        },
+        "hidden_list_signal": {
+          "type": "boolean"
+        },
+        "note_type": {
+          "type": "string"
+        },
+        "notes_visible_chars": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prompt_visible_chars": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retrieved_target": {
+          "type": "string"
+        },
+        "retrieved_visible_chars": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "semantic_review_required": {
+          "type": "boolean"
+        },
+        "source_row": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "visible_context": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible_context_chars": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "note_type",
+        "source_row",
+        "retrieved_target",
+        "retrieved_visible_chars",
+        "candidate_items",
+        "candidate_item_count",
+        "hidden_list_signal",
+        "prompt_visible_chars",
+        "notes_visible_chars",
+        "semantic_review_required",
+        "diagnostics"
+      ],
+      "type": "object"
+    },
+    "Diagnostic": {
+      "properties": {
+        "auto_fix_available": {
+          "type": "boolean"
+        },
+        "code": {
+          "type": "string"
+        },
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "owner_skill": {
+          "type": "string"
+        },
+        "row": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "severity": {
+          "$ref": "#/$defs/Severity"
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "owner_skill",
+        "message",
+        "auto_fix_available"
+      ],
+      "type": "object"
+    },
+    "Severity": {
+      "enum": [
+        "CRITICAL",
+        "WARN",
+        "INFO",
+        "LOG"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "clinical_correctness_certified": {
+      "type": "boolean"
+    },
+    "content_hash": {
+      "type": "string"
+    },
+    "covered_obligation_count": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "diagnostics": {
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      },
+      "type": "array"
+    },
+    "export_authorized": {
+      "type": "boolean"
+    },
+    "guidance": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mode": {
+      "type": "string"
+    },
+    "obligation_count": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "retrieval_count": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "review": {
+      "$ref": "#/$defs/BatchInformationReview"
+    },
+    "reviewed_count": {
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "snapshot_hash": {
+      "type": "string"
+    },
+    "verdict": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "mode",
+    "snapshot_hash",
+    "content_hash",
+    "verdict",
+    "clinical_correctness_certified",
+    "export_authorized",
+    "retrieval_count",
+    "reviewed_count",
+    "obligation_count",
+    "covered_obligation_count",
+    "diagnostics",
+    "guidance",
+    "review"
+  ],
+  "title": "QualityReport",
+  "type": "object"
+}
