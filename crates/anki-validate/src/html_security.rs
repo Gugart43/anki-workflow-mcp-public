@@ -248,47 +248,21 @@ fn is_benign_html5_diff(orig: &str, clean: &str) -> bool {
                 continue;
             }
 
-            // Entity decodings in text nodes
-            if o.starts_with(b"&#124;") && c.starts_with(b"|") {
-                o = &o[6..];
-                c = &c[1..];
-                continue;
+            // Entity decodings in text nodes (shared decoder with html_text::try_decode_entity)
+            if o[0] == b'&'
+                && let Ok(o_str) = std::str::from_utf8(o)
+                && let Some((decoded, consumed)) = crate::html_text::try_decode_entity(o_str)
+                && !matches!(decoded, '<' | '>' | '&')
+            {
+                let mut buf = [0u8; 4];
+                let encoded = decoded.encode_utf8(&mut buf).as_bytes();
+                if c.starts_with(encoded) {
+                    o = &o[consumed..];
+                    c = &c[encoded.len()..];
+                    continue;
+                }
             }
-            if o.starts_with(b"&quot;") && c.starts_with(b"\"") {
-                o = &o[6..];
-                c = &c[1..];
-                continue;
-            }
-            if o.starts_with(b"&apos;") && c.starts_with(b"'") {
-                o = &o[6..];
-                c = &c[1..];
-                continue;
-            }
-            if o.starts_with(b"&#39;") && c.starts_with(b"'") {
-                o = &o[5..];
-                c = &c[1..];
-                continue;
-            }
-            if o.starts_with(b"&#x27;") && c.starts_with(b"'") {
-                o = &o[6..];
-                c = &c[1..];
-                continue;
-            }
-            if o.starts_with(b"&le;") && c.starts_with("≤".as_bytes()) {
-                o = &o[4..];
-                c = &c["≤".len()..];
-                continue;
-            }
-            if o.starts_with(b"&ge;") && c.starts_with("≥".as_bytes()) {
-                o = &o[4..];
-                c = &c["≥".len()..];
-                continue;
-            }
-            if o.starts_with(b"&nbsp;") && c.starts_with("\u{00A0}".as_bytes()) {
-                o = &o[6..];
-                c = &c["\u{00A0}".len()..];
-                continue;
-            }
+
             if o.starts_with("\u{00A0}".as_bytes()) && c.starts_with(b"&nbsp;") {
                 o = &o["\u{00A0}".len()..];
                 c = &c[6..];
@@ -422,6 +396,23 @@ mod tests {
             assert!(
                 !has_unsafe_html(case),
                 "benign normalization should not be marked unsafe: {case}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_decoded_clinical_entities() {
+        let clinical_cases = [
+            "<p>A &rarr; B &uarr; PA &darr; FC &harr; equilíbrio &rArr; conduta</p>",
+            "<p>Temperatura 37,5 &plusmn; 0,5 &deg;C; dose 50 &mu;g</p>",
+            "<p>Receptores &alpha;, &beta;, &gamma;, &delta; e &Delta;pH</p>",
+            "<p>Faixa 10&ndash;20 &bull; p &ne; 0,05 &bull; IMC &asymp; 25 kg/m&sup2; &bull; 10 mm&sup3;</p>",
+        ];
+
+        for case in clinical_cases {
+            assert!(
+                !has_unsafe_html(case),
+                "valid clinical entities must not trigger has_unsafe_html: {case}"
             );
         }
     }

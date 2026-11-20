@@ -54,6 +54,13 @@ test("detectLinuxLibc handles glibc, musl, and fails closed with unknown", async
   });
   assert.equal(libcGlibcFile, "glibc");
 
+  const libcGlibcArm64File = detectLinuxLibc({
+    getReport: () => ({ header: {} }),
+    existsSync: (p) => p === "/lib/aarch64-linux-gnu/libc.so.6",
+    readdirSync: () => [],
+  });
+  assert.equal(libcGlibcArm64File, "glibc");
+
   // If nothing identifies glibc or musl, it must return 'unknown' and fail closed
   const libcUnknown = detectLinuxLibc({
     getReport: () => null,
@@ -71,9 +78,19 @@ test("resolvePlatformTarget fails closed for musl or unknown linux libc", async 
   const linuxGlibc = resolvePlatformTarget({ platform: "linux", arch: "x64", libc: "glibc" });
   assert.equal(linuxGlibc.pkg, "@gugart43/anki-workflow-mcp-linux-x64-gnu");
 
+  // Linux arm64 glibc succeeds
+  const linuxArm64Glibc = resolvePlatformTarget({ platform: "linux", arch: "arm64", libc: "glibc" });
+  assert.equal(linuxArm64Glibc.pkg, "@gugart43/anki-workflow-mcp-linux-arm64-gnu");
+
   // Linux x64 musl fails closed
   assert.throws(
     () => resolvePlatformTarget({ platform: "linux", arch: "x64", libc: "musl" }),
+    /Unsupported Linux libc \(musl\)/
+  );
+
+  // Linux arm64 musl fails closed
+  assert.throws(
+    () => resolvePlatformTarget({ platform: "linux", arch: "arm64", libc: "musl" }),
     /Unsupported Linux libc \(musl\)/
   );
 
@@ -97,8 +114,8 @@ test("resolvePlatformTarget fails closed for musl or unknown linux libc", async 
 
   // unsupported arch/os fails
   assert.throws(
-    () => resolvePlatformTarget({ platform: "linux", arch: "arm64", libc: "glibc" }),
-    /Unsupported platform linux\/arm64/
+    () => resolvePlatformTarget({ platform: "linux", arch: "riscv64", libc: "glibc" }),
+    /Unsupported platform linux\/riscv64/
   );
   assert.throws(
     () => resolvePlatformTarget({ platform: "freebsd", arch: "x64", libc: "" }),

@@ -105,7 +105,8 @@ Para manter o núcleo Rust purista e livre de dependências Node na raiz do repo
    - Pipeline de codegen que consome os JSON Schemas exportados do Rust via `schemars` em `contracts/v2/schemas/`.
    - Gera definições de tipos TypeScript fortemente tipadas (`contracts/v2/ts/index.d.ts`) usando `json-schema-to-typescript`, com validação estrita via `tsc --noEmit` (`just codegen-contracts`).
 3. **`npm/anki-workflow-mcp` (Launcher npx Fino Multiplataforma):**
-   - Launcher `npx` fino multiplataforma (`@gugart43/anki-workflow-mcp`) baseado em `optionalDependencies` por plataforma/arquitetura (Linux x64, Windows x64, macOS arm64/x64), sem scripts de ciclo de vida (`postinstall`).
+   - Launcher `npx` fino multiplataforma (`@gugart43/anki-workflow-mcp`) baseado em `optionalDependencies` por plataforma/arquitetura (Linux x64, Linux ARM64, Windows x64, macOS arm64/x64), sem scripts de ciclo de vida (`postinstall`).
+   - Distribui 5 pacotes de plataforma nativa: `@gugart43/anki-workflow-mcp-linux-x64-gnu` (`x86_64-unknown-linux-gnu`), `@gugart43/anki-workflow-mcp-linux-arm64-gnu` (`aarch64-unknown-linux-gnu`), `@gugart43/anki-workflow-mcp-win32-x64` (`x86_64-pc-windows-msvc`), `@gugart43/anki-workflow-mcp-darwin-arm64` (`aarch64-apple-darwin`) e `@gugart43/anki-workflow-mcp-darwin-x64` (`x86_64-apple-darwin`).
    - Verifica integridade SHA-256 dos binários, não realiza download em runtime e aceita `ANKI_WORKFLOW_MCP_BIN` como override local explícito (detalhes em [npm/README.md](npm/README.md)).
 
 ---

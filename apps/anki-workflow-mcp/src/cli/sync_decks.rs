@@ -3,13 +3,15 @@
 //! Synchronizes deck hierarchy from a live Anki SQLite collection into
 //! `deck_hierarchy.json` without modifying the original collection files.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use rusqlite::backup::Backup;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -109,6 +111,44 @@ pub fn normalize_name(name: &str) -> String {
         .filter(|p| !p.is_empty())
         .collect();
     parts.join("::")
+}
+
+/// Fold PT-BR and common Latin diacritics to base lowercase characters for primary collation.
+/// Also strips Unicode combining diacritical marks (`U+0300..=U+036F`) for NFD inputs.
+pub fn fold_pt_br_diacritics(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ('\u{0300}'..='\u{036f}').contains(&ch) {
+            continue;
+        }
+        match ch {
+            'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' | 'Á' | 'À' | 'Â' | 'Ã' | 'Ä' | 'Å' => {
+                out.push('a');
+            }
+            'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => out.push('e'),
+            'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => out.push('i'),
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => out.push('o'),
+            'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => out.push('u'),
+            'ç' | 'Ç' => out.push('c'),
+            'ñ' | 'Ñ' => out.push('n'),
+            'ý' | 'ÿ' | 'Ý' | 'Ÿ' => out.push('y'),
+            _ => {
+                for lc in ch.to_lowercase() {
+                    out.push(lc);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// PT-BR case- and diacritic-insensitive collation with lowercase and raw tie-breaking.
+/// Ensures leading accents sort with their base letters (e.g. `"Áudio"` before `"Zoonoses"`).
+pub fn pt_br_unicase_cmp(a: &str, b: &str) -> Ordering {
+    fold_pt_br_diacritics(a)
+        .cmp(&fold_pt_br_diacritics(b))
+        .then_with(|| a.to_lowercase().cmp(&b.to_lowercase()))
+        .then_with(|| a.cmp(b))
 }
 
 /// Generate UTC ISO 8601 timestamp string from `SystemTime::now()`.
@@ -235,8 +275,8 @@ pub fn resolve_default_output() -> Result<PathBuf, (u8, String)> {
     Ok(PathBuf::from(".anki-workflow").join("deck_hierarchy.json"))
 }
 
-/// Snapshot collection file and any companion WAL / SHM files to a temporary directory,
-/// then open a read-only no-mutex connection and register `unicase` collation.
+/// Snapshot collection online using SQLite's Backup API into a temporary database file
+/// (never copying `-shm`), then open a read-only connection with PT-BR `unicase` collation.
 pub fn snapshot_and_open_collection(
     col_path: &Path,
 ) -> Result<(tempfile::TempDir, Connection), (u8, String)> {
@@ -247,43 +287,9 @@ pub fn snapshot_and_open_collection(
         ));
     }
 
-    let temp_dir = tempfile::Builder::new()
-        .prefix("anki_col_sync_")
-        .tempdir()
-        .map_err(|e| {
-            (
-                1,
-                format!("Failed to create temporary directory for database snapshot: {e}"),
-            )
-        })?;
-
     let mut wal_os = col_path.as_os_str().to_os_string();
     wal_os.push("-wal");
     let wal_path = PathBuf::from(wal_os);
-
-    let mut shm_os = col_path.as_os_str().to_os_string();
-    shm_os.push("-shm");
-    let shm_path = PathBuf::from(shm_os);
-
-    let file_name = col_path
-        .file_name()
-        .unwrap_or_else(|| OsStr::new("collection.anki2"));
-    let temp_col_path = temp_dir.path().join(file_name);
-
-    let mut temp_wal_os = temp_col_path.as_os_str().to_os_string();
-    temp_wal_os.push("-wal");
-    let temp_wal_path = PathBuf::from(temp_wal_os);
-
-    let mut temp_shm_os = temp_col_path.as_os_str().to_os_string();
-    temp_shm_os.push("-shm");
-    let temp_shm_path = PathBuf::from(temp_shm_os);
-
-    fs::copy(col_path, &temp_col_path).map_err(|e| {
-        (
-            1,
-            format!("Failed to copy collection.anki2 to temporary directory: {e}"),
-        )
-    })?;
 
     if wal_path.exists() {
         let wal_len = fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
@@ -321,21 +327,52 @@ pub fn snapshot_and_open_collection(
                 ));
             }
         }
-        fs::copy(&wal_path, &temp_wal_path).map_err(|e| {
-            (
-                1,
-                format!("Failed to copy collection WAL file to temporary directory: {e}"),
-            )
-        })?;
     }
 
-    if shm_path.exists() {
-        fs::copy(&shm_path, &temp_shm_path).map_err(|e| {
+    let temp_dir = tempfile::Builder::new()
+        .prefix("anki_col_sync_")
+        .tempdir()
+        .map_err(|e| {
             (
                 1,
-                format!("Failed to copy collection SHM file to temporary directory: {e}"),
+                format!("Failed to create temporary directory for database snapshot: {e}"),
             )
         })?;
+
+    let file_name = col_path
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("collection.anki2"));
+    let temp_col_path = temp_dir.path().join(file_name);
+
+    {
+        let src_conn = Connection::open_with_flags(
+            col_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| (1, format!("Failed to open source collection: {e}")))?;
+
+        src_conn.busy_timeout(Duration::from_secs(5)).map_err(|e| {
+            (
+                1,
+                format!("Failed to set busy_timeout on source collection: {e}"),
+            )
+        })?;
+
+        let mut dst_conn = Connection::open(&temp_col_path).map_err(|e| {
+            (
+                1,
+                format!("Failed to create temporary snapshot database: {e}"),
+            )
+        })?;
+
+        {
+            let backup = Backup::new(&src_conn, &mut dst_conn)
+                .map_err(|e| (1, format!("Failed to initialize online SQLite backup: {e}")))?;
+            backup
+                .run_to_completion(100, Duration::from_millis(25), None)
+                .map_err(|e| (1, format!("Failed to complete online SQLite backup: {e}")))?;
+        }
+        let _ = dst_conn.execute_batch("PRAGMA journal_mode = DELETE;");
     }
 
     let conn = Connection::open_with_flags(
@@ -344,7 +381,7 @@ pub fn snapshot_and_open_collection(
     )
     .map_err(|e| (1, format!("Failed to open collection snapshot: {e}")))?;
 
-    conn.create_collation("unicase", |a, b| a.to_lowercase().cmp(&b.to_lowercase()))
+    conn.create_collation("unicase", pt_br_unicase_cmp)
         .map_err(|e| (1, format!("Failed to register unicase collation: {e}")))?;
 
     // Ensure consistent snapshot when WAL is active / reject corrupt or uncertain mutations
@@ -431,7 +468,7 @@ pub fn query_all_decks(conn: &Connection) -> Result<Vec<(i64, String)>, (u8, Str
             }
         }
 
-        results.sort_by_key(|a| a.1.to_lowercase());
+        results.sort_by(|a, b| pt_br_unicase_cmp(&a.1, &b.1));
         return Ok(results);
     }
 
@@ -461,11 +498,7 @@ pub fn filter_and_merge_hierarchy(
             });
         }
     }
-    subdecks.sort_by(|a, b| {
-        let a_l = a.name.to_lowercase();
-        let b_l = b.name.to_lowercase();
-        a_l.cmp(&b_l).then_with(|| a.name.cmp(&b.name))
-    });
+    subdecks.sort_by(|a, b| pt_br_unicase_cmp(&a.name, &b.name));
 
     let mut existing_decks: BTreeSet<String> = BTreeSet::new();
     let mut existing_details: BTreeMap<String, Value> = BTreeMap::new();
@@ -521,11 +554,7 @@ pub fn filter_and_merge_hierarchy(
         all_deck_names.insert(d.name.clone());
     }
     let mut deck_names: Vec<String> = all_deck_names.into_iter().collect();
-    deck_names.sort_by(|a, b| {
-        let a_l = a.to_lowercase();
-        let b_l = b.to_lowercase();
-        a_l.cmp(&b_l).then_with(|| a.cmp(b))
-    });
+    deck_names.sort_by(|a, b| pt_br_unicase_cmp(a, b));
 
     let mut final_details: BTreeMap<String, DeckDetail> = BTreeMap::new();
 
@@ -619,27 +648,47 @@ pub fn persist_hierarchy_atomic(
         .sync_all()
         .map_err(|e| (1, format!("Failed to sync temporary hierarchy file: {e}")))?;
 
-    match temp_file.persist(output_path) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            #[cfg(windows)]
-            {
-                if output_path.exists() {
-                    let _ = fs::remove_file(output_path);
-                }
-                if e.file.persist(output_path).is_ok() {
-                    return Ok(());
+    #[cfg(windows)]
+    {
+        let mut current = temp_file;
+        let mut attempt = 0u8;
+        loop {
+            match current.persist(output_path) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    let is_transient = e.error.kind() == std::io::ErrorKind::PermissionDenied
+                        || matches!(e.error.raw_os_error(), Some(5) | Some(32));
+                    if is_transient && attempt < 3 {
+                        attempt += 1;
+                        current = e.file;
+                        std::thread::sleep(Duration::from_millis(25 * u64::from(attempt)));
+                        continue;
+                    }
+                    return Err((
+                        1,
+                        format!(
+                            "Failed to persist hierarchy file to {}: {}",
+                            output_path.display(),
+                            e.error
+                        ),
+                    ));
                 }
             }
-            Err((
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        temp_file.persist(output_path).map(|_| ()).map_err(|e| {
+            (
                 1,
                 format!(
                     "Failed to persist hierarchy file to {}: {}",
                     output_path.display(),
                     e.error
                 ),
-            ))
-        }
+            )
+        })
     }
 }
 
@@ -1106,5 +1155,111 @@ mod tests {
         let (code, msg) = result.unwrap_err();
         assert_eq!(code, 1);
         assert!(msg.contains("HIERARCHY.CORRUPT"));
+    }
+
+    #[test]
+    fn test_pt_br_unicase_collation_leading_accents_and_tiebreak() {
+        assert_eq!(pt_br_unicase_cmp("Áudio", "Zoonoses"), Ordering::Less);
+        assert_eq!(pt_br_unicase_cmp("Audio", "Áudio"), Ordering::Less);
+        assert_eq!(
+            pt_br_unicase_cmp("A\u{0301}udio", "Zoonoses"),
+            Ordering::Less
+        );
+        assert_eq!(pt_br_unicase_cmp("Audio", "A\u{0301}udio"), Ordering::Less);
+        assert_eq!(pt_br_unicase_cmp("A\u{0301}udio", "Áudio"), Ordering::Less);
+        assert_eq!(pt_br_unicase_cmp("Zoonoses", "Áudio"), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_online_backup_snapshot_no_shm_copy_with_live_wal_writer() {
+        let td = tempfile::tempdir().unwrap();
+        let col_path = td.path().join("collection.anki2");
+
+        let writer = Connection::open(&col_path).unwrap();
+        writer.execute_batch("PRAGMA journal_mode = WAL;").unwrap();
+        writer
+            .execute(
+                "CREATE TABLE decks (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        writer
+            .execute("INSERT INTO decks VALUES (1, '02_MEDICINA_AnkiMBR')", [])
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO decks VALUES (2, '02_MEDICINA_AnkiMBR::Cardiologia')",
+                [],
+            )
+            .unwrap();
+
+        // While writer is live in WAL mode, take snapshot
+        let (snap_dir, snap_conn) =
+            snapshot_and_open_collection(&col_path).expect("snapshot should succeed");
+
+        // Verify absence of -shm in the snapshot directory
+        for entry in fs::read_dir(snap_dir.path()).unwrap().flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !fname.ends_with("-shm"),
+                "Snapshot directory should never contain -shm companion file: {fname}"
+            );
+        }
+
+        // Verify decks are readable from snapshot connection
+        let decks = query_all_decks(&snap_conn).expect("query decks from snapshot");
+        assert_eq!(decks.len(), 2);
+        assert_eq!(decks[0].1, "02_MEDICINA_AnkiMBR");
+        assert_eq!(decks[1].1, "02_MEDICINA_AnkiMBR::Cardiologia");
+
+        drop(snap_conn);
+        drop(snap_dir);
+        drop(writer);
+    }
+
+    #[test]
+    fn test_persist_hierarchy_atomic_overwrites_existing_file() {
+        let td = tempfile::tempdir().unwrap();
+        let out_path = td.path().join("deck_hierarchy.json");
+
+        // Pre-create existing file
+        fs::write(&out_path, b"PRE_EXISTING_CONTENT").unwrap();
+        assert!(out_path.exists());
+
+        let initial_data = HierarchyData {
+            root_deck: "02_MEDICINA_AnkiMBR".to_string(),
+            last_synced: "2026-01-01T00:00:00.000Z".to_string(),
+            total_subdecks: 1,
+            decks: vec!["02_MEDICINA_AnkiMBR".to_string()],
+            deck_details: BTreeMap::new(),
+        };
+
+        persist_hierarchy_atomic(&initial_data, &out_path)
+            .expect("persist should succeed overwriting existing file");
+        let content1 = fs::read_to_string(&out_path).unwrap();
+        let json1: Value = serde_json::from_str(&content1).unwrap();
+        assert_eq!(json1["total_subdecks"], 1);
+
+        // Overwrite again with updated data
+        let updated_data = HierarchyData {
+            root_deck: "02_MEDICINA_AnkiMBR".to_string(),
+            last_synced: "2026-01-02T00:00:00.000Z".to_string(),
+            total_subdecks: 2,
+            decks: vec![
+                "02_MEDICINA_AnkiMBR".to_string(),
+                "02_MEDICINA_AnkiMBR::Pediatria".to_string(),
+            ],
+            deck_details: BTreeMap::new(),
+        };
+
+        persist_hierarchy_atomic(&updated_data, &out_path)
+            .expect("second persist should also succeed overwriting");
+        let content2 = fs::read_to_string(&out_path).unwrap();
+        let json2: Value = serde_json::from_str(&content2).unwrap();
+        assert_eq!(json2["total_subdecks"], 2);
+        assert_eq!(
+            json2["decks"].as_array().unwrap()[1].as_str().unwrap(),
+            "02_MEDICINA_AnkiMBR::Pediatria"
+        );
     }
 }

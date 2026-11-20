@@ -15,6 +15,10 @@ const TARGETS = Object.freeze({
     pkg: "@gugart43/anki-workflow-mcp-linux-x64-gnu",
     bin: "bin/anki-workflow-mcp",
   },
+  "linux:arm64:glibc": {
+    pkg: "@gugart43/anki-workflow-mcp-linux-arm64-gnu",
+    bin: "bin/anki-workflow-mcp",
+  },
   "win32:x64:": {
     pkg: "@gugart43/anki-workflow-mcp-win32-x64",
     bin: "bin/anki-workflow-mcp.exe",
@@ -79,6 +83,8 @@ function detectLinuxLibc(probes = {}) {
     for (const p of [
       "/lib/x86_64-linux-gnu/libc.so.6",
       "/lib64/ld-linux-x86-64.so.2",
+      "/lib/aarch64-linux-gnu/libc.so.6",
+      "/lib/ld-linux-aarch64.so.1",
       "/usr/lib/libc.so.6",
     ]) {
       if (existsSync(p)) {
@@ -127,7 +133,7 @@ function resolvePlatformTarget(options = {}) {
 
   if (platform === "linux" && libc !== "glibc") {
     fail(
-      `Unsupported Linux libc (${libc}). Only glibc (x86_64-unknown-linux-gnu) is published. ` +
+      `Unsupported Linux libc (${libc}). Only glibc (x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu) is published. ` +
         `Build from source or set ANKI_WORKFLOW_MCP_BIN (${RELEASES_URL}).`
     );
   }
@@ -137,7 +143,7 @@ function resolvePlatformTarget(options = {}) {
   if (!target) {
     fail(
       `Unsupported platform ${platform}/${arch}${libc ? ` (${libc})` : ""}. ` +
-        `Supported: linux/x64 (glibc), win32/x64, darwin/arm64, darwin/x64. ` +
+        `Supported: linux/x64 (glibc), linux/arm64 (glibc), win32/x64, darwin/arm64, darwin/x64. ` +
         `You can override with ANKI_WORKFLOW_MCP_BIN (${RELEASES_URL}).`
     );
   }

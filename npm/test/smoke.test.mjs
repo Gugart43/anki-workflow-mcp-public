@@ -21,6 +21,7 @@ test("npm pack, install --ignore-scripts, and stdio JSON hygiene smoke test", ()
     // Build synthetic native binary that acts like anki-workflow-mcp serve
     const targets = [
       { target: "x86_64-unknown-linux-gnu", bin: "anki-workflow-mcp", ext: "tar.gz" },
+      { target: "aarch64-unknown-linux-gnu", bin: "anki-workflow-mcp", ext: "tar.gz" },
       { target: "x86_64-pc-windows-msvc", bin: "anki-workflow-mcp.exe", ext: "zip" },
       { target: "aarch64-apple-darwin", bin: "anki-workflow-mcp", ext: "tar.gz" },
       { target: "x86_64-apple-darwin", bin: "anki-workflow-mcp", ext: "tar.gz" },
@@ -88,6 +89,7 @@ test("npm pack, install --ignore-scripts, and stdio JSON hygiene smoke test", ()
     const npmCmd = isWin ? "npm.cmd" : "npm";
     const platformDirs = [
       path.join(outDir, "platforms", "linux-x64-gnu"),
+      path.join(outDir, "platforms", "linux-arm64-gnu"),
       path.join(outDir, "platforms", "win32-x64"),
       path.join(outDir, "platforms", "darwin-arm64"),
       path.join(outDir, "platforms", "darwin-x64"),
@@ -107,7 +109,11 @@ test("npm pack, install --ignore-scripts, and stdio JSON hygiene smoke test", ()
     execFileSync(npmCmd, ["init", "-y"], { cwd: smokeDir, stdio: "ignore", shell: isWin });
 
     // Identify current platform tarball + main tarball
-    const currentPlatformSlug = isWin ? "win32-x64" : "linux-x64-gnu";
+    const currentPlatformSlug = isWin
+      ? "win32-x64"
+      : process.arch === "arm64"
+        ? "linux-arm64-gnu"
+        : "linux-x64-gnu";
     const currentPlatformTgz = path.join(
       tarballsDir,
       `gugart43-anki-workflow-mcp-${currentPlatformSlug}-0.1.0.tgz`
@@ -179,9 +185,7 @@ test("npm pack, install --ignore-scripts, and stdio JSON hygiene smoke test", ()
       "checksums.json"
     );
     const chkData = JSON.parse(fs.readFileSync(checksumsFile, "utf8"));
-    const pkgKey = isWin
-      ? "@gugart43/anki-workflow-mcp-win32-x64"
-      : "@gugart43/anki-workflow-mcp-linux-x64-gnu";
+    const pkgKey = `@gugart43/anki-workflow-mcp-${currentPlatformSlug}`;
     chkData.packages[pkgKey].sha256 = "0".repeat(64);
     fs.writeFileSync(checksumsFile, JSON.stringify(chkData, null, 2), "utf8");
 

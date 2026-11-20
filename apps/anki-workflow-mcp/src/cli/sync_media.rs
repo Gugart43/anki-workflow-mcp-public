@@ -76,18 +76,25 @@ pub struct CatalogEntry {
 pub fn parse_args(args: &[String]) -> Result<SyncMediaArgs, (u8, String)> {
     let mut parsed = SyncMediaArgs::default();
     let mut catalog_set = false;
+    let mut apply_flag = false;
+    let mut dry_run_flag = false;
 
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
         if arg == "-h" || arg == "--help" {
             return Err((
-                2,
-                "Usage: anki-workflow-mcp sync-media --catalog <PATH> [--collection-media-dir <DIR>] [--apply] [--copy-noise] [--only <NAMES>]"
+                0,
+                "Usage: anki-workflow-mcp sync-media --catalog <PATH> [--collection-media-dir <DIR>] [--apply | --dry-run] [--copy-noise] [--only <NAMES>]"
                     .to_string(),
             ));
         } else if arg == "--apply" {
             parsed.apply = true;
+            apply_flag = true;
+            i += 1;
+        } else if arg == "--dry-run" {
+            parsed.apply = false;
+            dry_run_flag = true;
             i += 1;
         } else if arg == "--copy-noise" {
             parsed.copy_noise = true;
@@ -132,6 +139,10 @@ pub fn parse_args(args: &[String]) -> Result<SyncMediaArgs, (u8, String)> {
         } else {
             return Err((2, format!("Unknown option: {arg}")));
         }
+    }
+
+    if apply_flag && dry_run_flag {
+        return Err((2, "Cannot specify both --apply and --dry-run".to_string()));
     }
 
     if !catalog_set {
@@ -324,25 +335,56 @@ pub fn is_noise_caption(clean_caption: &str) -> (bool, &'static str) {
 
 /// Validates that a filename does not contain path traversal or reserved device names.
 pub fn validate_filename_security(name: &str) -> Result<(), (u8, String)> {
-    if name.is_empty() {
+    if name.is_empty() || name.trim().is_empty() || name == "." || name == ".." {
         let err = json!({
             "status": "ERROR",
             "code": "MEDIA.SECURITY_ERROR",
-            "message": "Empty filename is forbidden",
+            "message": format!("Invalid or empty filename rejected: '{name}'"),
             "suggestion": "Filename must not be empty."
         });
         return Err((1, err.to_string()));
     }
-    if name.contains("..") || name.starts_with('/') || name.starts_with('\\') {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
         let err = json!({
             "status": "ERROR",
             "code": "MEDIA.SECURITY_ERROR",
             "message": format!("Path traversal rejected: '{name}'"),
-            "suggestion": "Filename must not contain path traversal characters."
+            "suggestion": "Filename must not contain path separators or traversal segments."
         });
         return Err((1, err.to_string()));
     }
-    let stem = name.split('.').next().unwrap_or(name);
+    let bytes = name.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let err = json!({
+            "status": "ERROR",
+            "code": "MEDIA.SECURITY_ERROR",
+            "message": format!("Drive-relative filename rejected: '{name}'"),
+            "suggestion": "Filename must not contain a Windows drive prefix."
+        });
+        return Err((1, err.to_string()));
+    }
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+    {
+        let err = json!({
+            "status": "ERROR",
+            "code": "MEDIA.SECURITY_ERROR",
+            "message": format!("Invalid Windows filename character rejected: '{name}'"),
+            "suggestion": "Remove control characters and Windows-forbidden characters (< > : \" | ? *)."
+        });
+        return Err((1, err.to_string()));
+    }
+    if name.ends_with(' ') || name.ends_with('.') {
+        let err = json!({
+            "status": "ERROR",
+            "code": "MEDIA.SECURITY_ERROR",
+            "message": format!("Trailing space or dot rejected: '{name}'"),
+            "suggestion": "Filename must not end with a space or dot."
+        });
+        return Err((1, err.to_string()));
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end();
     let upper = stem.to_ascii_uppercase();
     if matches!(
         upper.as_str(),
@@ -809,6 +851,218 @@ pub fn parse_csv_catalog(raw: &str, default_slug: &str) -> Result<Vec<CatalogEnt
     Ok(entries)
 }
 
+fn is_md_separator_row(cells: &[&str]) -> bool {
+    !cells.is_empty()
+        && cells.iter().all(|cell| {
+            let t = cell.trim();
+            !t.is_empty()
+                && t.contains('-')
+                && t.chars().all(|c| c == '-' || c == ':' || c.is_whitespace())
+        })
+}
+
+fn extract_markdown_image_target(cell: &str) -> Option<String> {
+    if let Some(bang_idx) = cell.find("![") {
+        let after_bang = &cell[bang_idx + 2..];
+        if let Some(close_bracket) = after_bang.find("](") {
+            let after_open = &after_bang[close_bracket + 2..];
+            if let Some(close_paren) = after_open.find(')') {
+                let raw_target = after_open[..close_paren].trim();
+                let target = if let Some(inner) = raw_target
+                    .strip_prefix('<')
+                    .and_then(|s| s.strip_suffix('>'))
+                {
+                    inner.trim()
+                } else {
+                    raw_target.split_whitespace().next().unwrap_or("")
+                };
+                if !target.is_empty() {
+                    return Some(target.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parses a Markdown table catalog (`catalog.md`), extracting `![](file)` image targets
+/// and ignoring Markdown table separator rows (`---`).
+pub fn parse_markdown_catalog(
+    raw: &str,
+    default_slug: &str,
+) -> Result<Vec<CatalogEntry>, (u8, String)> {
+    let text = raw.trim_start_matches('\u{feff}');
+    let mut entries = Vec::new();
+
+    let mut col_filename: Option<usize> = None;
+    let mut col_namespaced: Option<usize> = None;
+    let mut col_caption: Option<usize> = None;
+    let mut col_slug: Option<usize> = None;
+    let mut col_page: Option<usize> = None;
+    let mut col_noise: Option<usize> = None;
+    let mut header_seen = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.contains('|') {
+            continue;
+        }
+
+        let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+        let inner = inner.strip_suffix('|').unwrap_or(inner);
+        let cells: Vec<&str> = inner.split('|').map(|c| c.trim()).collect();
+
+        if cells.is_empty() || cells.iter().all(|c| c.is_empty()) || is_md_separator_row(&cells) {
+            continue;
+        }
+
+        let has_md_image = cells
+            .iter()
+            .any(|c| extract_markdown_image_target(c).is_some());
+
+        if !header_seen && !has_md_image {
+            let lower_cells: Vec<String> = cells.iter().map(|c| c.to_lowercase()).collect();
+            let looks_like_header = lower_cells.iter().any(|h| {
+                matches!(
+                    h.as_str(),
+                    "arquivo"
+                        | "filename"
+                        | "file"
+                        | "imagem"
+                        | "image"
+                        | "preview"
+                        | "legenda"
+                        | "caption"
+                        | "namespaced"
+                        | "tag anki"
+                        | "slug"
+                        | "page"
+                        | "página"
+                        | "pagina"
+                        | "noise"
+                )
+            });
+            if looks_like_header {
+                col_filename = lower_cells
+                    .iter()
+                    .position(|h| matches!(h.as_str(), "arquivo" | "filename" | "file"));
+                col_namespaced = lower_cells
+                    .iter()
+                    .position(|h| matches!(h.as_str(), "namespaced" | "tag anki"));
+                col_caption = lower_cells
+                    .iter()
+                    .position(|h| matches!(h.as_str(), "legenda" | "caption"));
+                col_slug = lower_cells.iter().position(|h| h == "slug");
+                col_page = lower_cells
+                    .iter()
+                    .position(|h| matches!(h.as_str(), "page" | "página" | "pagina"));
+                col_noise = lower_cells.iter().position(|h| h == "noise");
+                header_seen = true;
+                continue;
+            }
+        }
+
+        let img_match = cells
+            .iter()
+            .enumerate()
+            .find_map(|(idx, c)| extract_markdown_image_target(c).map(|target| (idx, target)));
+
+        let (img_col, filename) = if let Some((idx, target)) = img_match {
+            (Some(idx), target)
+        } else if let Some(fn_idx) = col_filename {
+            let candidate = cells.get(fn_idx).copied().unwrap_or("").trim();
+            if candidate.is_empty() {
+                continue;
+            }
+            (Some(fn_idx), candidate.trim_matches('`').to_string())
+        } else {
+            continue;
+        };
+
+        let raw_slug = col_slug
+            .and_then(|idx| cells.get(idx))
+            .copied()
+            .unwrap_or("")
+            .trim();
+        let slug = if !raw_slug.is_empty() {
+            normalize_slug(raw_slug)
+        } else {
+            default_slug.to_string()
+        };
+
+        let raw_cap = if let Some(cap_idx) = col_caption {
+            cells.get(cap_idx).copied().unwrap_or("")
+        } else {
+            cells
+                .iter()
+                .enumerate()
+                .find(|(idx, c)| {
+                    Some(*idx) != img_col
+                        && Some(*idx) != col_filename
+                        && Some(*idx) != col_namespaced
+                        && !c.is_empty()
+                        && !c.chars().all(|ch| ch.is_ascii_digit())
+                })
+                .map(|(_, c)| *c)
+                .unwrap_or("")
+        };
+        let clean_cap = clean_extractor_caption(raw_cap);
+
+        let explicit_ns = col_namespaced
+            .and_then(|idx| cells.get(idx))
+            .copied()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('`');
+        let namespaced = if !explicit_ns.is_empty() {
+            if let Some(start) = explicit_ns.find("src=\"") {
+                explicit_ns[start + 5..]
+                    .split('"')
+                    .next()
+                    .unwrap_or(explicit_ns)
+                    .trim()
+                    .to_lowercase()
+            } else {
+                explicit_ns.to_lowercase()
+            }
+        } else {
+            build_namespaced(&slug, &filename)
+        };
+
+        let explicit_noise = col_noise.and_then(|idx| cells.get(idx)).and_then(|v| {
+            match v.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Some(true),
+                "false" | "0" | "no" => Some(false),
+                _ => None,
+            }
+        });
+        let (is_noise, n_reason) = if let Some(n) = explicit_noise {
+            (n, if n { "explicit_noise" } else { "" })
+        } else {
+            is_noise_caption(&clean_cap)
+        };
+
+        let page = col_page
+            .and_then(|idx| cells.get(idx))
+            .and_then(|s| s.parse::<u32>().ok());
+
+        entries.push(CatalogEntry {
+            filename,
+            namespaced,
+            caption: clean_cap,
+            noise: is_noise,
+            noise_reason: n_reason.to_string(),
+            slug,
+            page,
+            width_px: None,
+            height_px: None,
+            item_type: "figure".to_string(),
+        });
+    }
+
+    Ok(entries)
+}
+
 /// Loads catalog entries from a file or directory.
 pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, String)> {
     let target_file = if catalog_path.is_dir() {
@@ -826,6 +1080,22 @@ pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, Strin
             .unwrap_or_else(|| catalog_path.to_path_buf())
     } else {
         catalog_path.to_path_buf()
+    };
+
+    // Promote sibling `catalog.json` automatically when `catalog.md` is provided.
+    let target_file = if target_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("catalog.md"))
+    {
+        let sibling_json = target_file.with_file_name("catalog.json");
+        if sibling_json.is_file() {
+            sibling_json
+        } else {
+            target_file
+        }
+    } else {
+        target_file
     };
 
     if target_file.is_dir() || !target_file.exists() {
@@ -859,6 +1129,8 @@ pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, Strin
 
     if ext == "json" {
         parse_json_catalog(&raw, &default_slug)
+    } else if ext == "md" {
+        parse_markdown_catalog(&raw, &default_slug)
     } else {
         parse_csv_catalog(&raw, &default_slug)
     }
@@ -890,9 +1162,121 @@ fn acquire_exclusive_lock_with_timeout(file: &File, timeout: Duration) -> std::i
     }
 }
 
+/// Acquires both primary and legacy exclusive media locks, propagating `GOV.LOCK` on contention.
+fn acquire_media_locks(
+    collection_media_dir: &Path,
+    timeout: Duration,
+) -> Result<(File, File), (u8, String)> {
+    let primary_lock_path = collection_media_dir.join(PRIMARY_LOCK_FILE);
+    let primary_lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&primary_lock_path)
+        .map_err(|e| {
+            let err = json!({
+                "status": "ERROR",
+                "code": "MEDIA.IO_ERROR",
+                "message": format!("Failed to open lock file: {e}"),
+                "suggestion": "Check directory permissions in collection.media."
+            });
+            (1, err.to_string())
+        })?;
+
+    if !acquire_exclusive_lock_with_timeout(&primary_lock_file, timeout).map_err(|e| {
+        let err = json!({
+            "status": "ERROR",
+            "code": "MEDIA.IO_ERROR",
+            "message": format!("Failed while acquiring primary lock: {e}"),
+            "suggestion": "Check permissions."
+        });
+        (1, err.to_string())
+    })? {
+        let err = json!({
+            "status": "ERROR",
+            "code": "GOV.LOCK",
+            "message": "Media collection is busy.",
+            "suggestion": "Retry after the current synchronization finishes."
+        });
+        return Err((1, err.to_string()));
+    }
+
+    let legacy_lock_path = collection_media_dir.join(LEGACY_LOCK_FILE);
+    let legacy_lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&legacy_lock_path)
+        .map_err(|e| {
+            let err = json!({
+                "status": "ERROR",
+                "code": "MEDIA.IO_ERROR",
+                "message": format!("Failed to open legacy lock file: {e}"),
+                "suggestion": "Check directory permissions in collection.media."
+            });
+            (1, err.to_string())
+        })?;
+
+    if !acquire_exclusive_lock_with_timeout(&legacy_lock_file, timeout).map_err(|e| {
+        let err = json!({
+            "status": "ERROR",
+            "code": "MEDIA.IO_ERROR",
+            "message": format!("Failed while acquiring legacy lock: {e}"),
+            "suggestion": "Check permissions."
+        });
+        (1, err.to_string())
+    })? {
+        let err = json!({
+            "status": "ERROR",
+            "code": "GOV.LOCK",
+            "message": "Media collection is busy (legacy lock active).",
+            "suggestion": "Retry after the current synchronization finishes."
+        });
+        return Err((1, err.to_string()));
+    }
+
+    Ok((primary_lock_file, legacy_lock_file))
+}
+
+fn collect_rollback_missing(
+    to_copy: &[(PathBuf, PathBuf, String)],
+    entries: &[CatalogEntry],
+    existing_missing: &[Value],
+) -> Vec<Value> {
+    let mut remaining_missing = existing_missing.to_vec();
+    for (_, _, ns) in to_copy {
+        if !remaining_missing
+            .iter()
+            .any(|m| m.get("namespaced").and_then(|v| v.as_str()) == Some(ns.as_str()))
+        {
+            let cap = entries
+                .iter()
+                .find(|e| e.namespaced == *ns)
+                .map(|e| e.caption.clone())
+                .unwrap_or_default();
+            remaining_missing.push(json!({
+                "namespaced": ns,
+                "caption": cap,
+            }));
+        }
+    }
+    remaining_missing
+}
+
 /// Main entrypoint for `sync-media` CLI subcommand.
 pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
-    let parsed_args = parse_args(args)?;
+    let parsed_args = match parse_args(args) {
+        Ok(a) => a,
+        Err((0, help)) => {
+            return Ok(json!({
+                "status": "help",
+                "usage": help,
+            }));
+        }
+        Err(err) => return Err(err),
+    };
 
     let collection_media_dir = match parsed_args.collection_media_dir {
         Some(dir) => dir,
@@ -945,58 +1329,15 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
 
     check_not_symlink(&parsed_args.catalog)?;
 
-    // Acquire exclusive locks spanning both preflight and apply.
-    // Side effect: lock files (.anki_workflow_media.lock and .anki-media-sync.lock)
-    // are created in collection.media if absent.
-    let primary_lock_path = collection_media_dir.join(PRIMARY_LOCK_FILE);
-    let primary_lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&primary_lock_path)
-        .map_err(|e| {
-            let err = json!({
-                "status": "ERROR",
-                "code": "MEDIA.IO_ERROR",
-                "message": format!("Failed to open lock file: {e}"),
-                "suggestion": "Check directory permissions in collection.media."
-            });
-            (1, err.to_string())
-        })?;
-
-    let legacy_lock_path = collection_media_dir.join(LEGACY_LOCK_FILE);
-    let legacy_lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&legacy_lock_path)
-        .ok();
-
-    if !acquire_exclusive_lock_with_timeout(&primary_lock_file, Duration::from_secs(5)).map_err(
-        |e| {
-            let err = json!({
-                "status": "ERROR",
-                "code": "MEDIA.IO_ERROR",
-                "message": format!("Failed while acquiring lock: {e}"),
-                "suggestion": "Check permissions."
-            });
-            (1, err.to_string())
-        },
-    )? {
-        let err = json!({
-            "status": "ERROR",
-            "code": "GOV.LOCK",
-            "message": "Media collection is busy.",
-            "suggestion": "Retry after the current synchronization finishes."
-        });
-        return Err((1, err.to_string()));
-    }
-
-    if let Some(ref legacy) = legacy_lock_file {
-        let _ = acquire_exclusive_lock_with_timeout(legacy, Duration::from_secs(5));
-    }
+    // Only create/acquire lock files when mutating (`--apply`).
+    let _locks = if parsed_args.apply {
+        Some(acquire_media_locks(
+            &collection_media_dir,
+            Duration::from_secs(5),
+        )?)
+    } else {
+        None
+    };
 
     let source_dir = if parsed_args.catalog.is_file() {
         parsed_args
@@ -1189,27 +1530,21 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
     let mut batch_copied: Vec<PathBuf> = Vec::new();
     let mut copied_names: Vec<String> = Vec::new();
 
-    for (src_file, target, namespaced) in to_copy {
+    for (src_file, target, namespaced) in &to_copy {
         let copy_res: Result<(), std::io::Error> = (|| {
             let mut tmp = tempfile::NamedTempFile::new_in(&collection_media_dir)?;
-            let mut src = File::open(&src_file)?;
+            let mut src = File::open(src_file)?;
             std::io::copy(&mut src, &mut tmp)?;
             tmp.as_file().sync_all()?;
-            #[cfg(windows)]
-            {
-                if target.exists() {
-                    let _ = fs::remove_file(&target);
-                }
-            }
-            tmp.persist(&target).map_err(|e| e.error)?;
+            tmp.persist(target).map_err(|e| e.error)?;
             Ok(())
         })();
 
         match copy_res {
             Ok(()) => {
-                batch_copied.push(target);
+                batch_copied.push(target.clone());
                 copied_names.push(namespaced.clone());
-                synced.push(namespaced);
+                synced.push(namespaced.clone());
             }
             Err(exc) => {
                 let mut rollback_errors = Vec::new();
@@ -1230,17 +1565,7 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
                     }
                 }
 
-                let mut remaining_missing = missing.clone();
-                for e in &entries {
-                    if !remaining_missing.iter().any(|m| {
-                        m.get("namespaced").and_then(|v| v.as_str()) == Some(&e.namespaced)
-                    }) {
-                        remaining_missing.push(json!({
-                            "namespaced": e.namespaced,
-                            "caption": e.caption,
-                        }));
-                    }
-                }
+                let remaining_missing = collect_rollback_missing(&to_copy, &entries, &missing);
 
                 let effective_synced = initial_synced + batch_copied.len() - rolled_back;
                 let active_total = initial_synced + remaining_missing.len() + collisions.len();
@@ -1353,9 +1678,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(err_unknown.0, 2);
 
-        // Help -> exit code 2
+        // Help -> exit code 0
         let err_help = parse_args(&["-h".to_string()]).unwrap_err();
-        assert_eq!(err_help.0, 2);
+        assert_eq!(err_help.0, 0);
     }
 
     #[test]
@@ -1456,8 +1781,9 @@ mod tests {
         assert_eq!(res["missing"], 1);
         assert_eq!(res["synced"], 0);
 
-        // Lock file created as documented side effect
-        assert!(dst.join(PRIMARY_LOCK_FILE).exists());
+        // Lock files are NOT created in dry-run
+        assert!(!dst.join(PRIMARY_LOCK_FILE).exists());
+        assert!(!dst.join(LEGACY_LOCK_FILE).exists());
         // Destination image was NOT copied
         assert!(!dst.join("neuro_brain.png").exists());
     }
@@ -1608,5 +1934,261 @@ mod tests {
         assert_eq!(res["copied"], 0);
         assert_eq!(res["missing"], 0);
         assert_eq!(res["sync_ratio"], 1.0);
+    }
+
+    #[test]
+    fn test_help_exit_zero_and_dry_run_flag() {
+        let err_short = parse_args(&["-h".to_string()]).unwrap_err();
+        assert_eq!(err_short.0, 0);
+        assert!(err_short.1.contains("Usage:"));
+        assert!(err_short.1.contains("--apply | --dry-run"));
+
+        let err_long = parse_args(&["--help".to_string()]).unwrap_err();
+        assert_eq!(err_long.0, 0);
+
+        let run_help = run(&["--help".to_string()]).unwrap();
+        assert_eq!(run_help["status"], "help");
+        assert!(run_help["usage"].as_str().unwrap().contains("Usage:"));
+
+        let dry_args = parse_args(&[
+            "--catalog".to_string(),
+            "cat.json".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap();
+        assert!(!dry_args.apply);
+
+        let conflict = parse_args(&[
+            "--catalog".to_string(),
+            "cat.json".to_string(),
+            "--apply".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(conflict.0, 2);
+        assert_eq!(conflict.1, "Cannot specify both --apply and --dry-run");
+    }
+
+    #[test]
+    fn test_dry_run_creates_no_lock_files() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dst).unwrap();
+
+        let img_path = src.join("heart.png");
+        fs::write(&img_path, b"heart_bytes").unwrap();
+
+        let cat_path = src.join("catalog.json");
+        fs::write(
+            &cat_path,
+            r#"{"slug":"cardio","items":[{"filename":"heart.png","caption":"Coração"}]}"#,
+        )
+        .unwrap();
+
+        let res = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(res["status"], "OK");
+        assert_eq!(res["copied"], 0);
+        assert!(!dst.join(PRIMARY_LOCK_FILE).exists());
+        assert!(!dst.join(LEGACY_LOCK_FILE).exists());
+    }
+
+    #[test]
+    fn test_legacy_lock_contention_propagates_gov_lock() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dst).unwrap();
+
+        let img_path = src.join("echo.png");
+        fs::write(&img_path, b"echo_bytes").unwrap();
+
+        let cat_path = src.join("catalog.json");
+        fs::write(
+            &cat_path,
+            r#"{"slug":"cardio","items":[{"filename":"echo.png","caption":"Ecocardiograma"}]}"#,
+        )
+        .unwrap();
+
+        let legacy_lock_path = dst.join(LEGACY_LOCK_FILE);
+        let legacy_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&legacy_lock_path)
+            .unwrap();
+        legacy_file.lock_exclusive().unwrap();
+
+        let err = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--apply".to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(err.0, 1);
+        let err_val: Value = serde_json::from_str(&err.1).unwrap();
+        assert_eq!(err_val["code"], "GOV.LOCK");
+        assert!(
+            err_val["message"]
+                .as_str()
+                .unwrap()
+                .contains("legacy lock active")
+        );
+    }
+
+    #[test]
+    fn test_rollback_missing_uses_to_copy_not_all_entries() {
+        let entries = vec![
+            CatalogEntry {
+                filename: "f1.png".to_string(),
+                namespaced: "cardio_f1.png".to_string(),
+                caption: "Fig 1".to_string(),
+                ..Default::default()
+            },
+            CatalogEntry {
+                filename: "f2.png".to_string(),
+                namespaced: "cardio_f2.png".to_string(),
+                caption: "Fig 2".to_string(),
+                ..Default::default()
+            },
+            CatalogEntry {
+                filename: "f3.png".to_string(),
+                namespaced: "cardio_f3.png".to_string(),
+                caption: "Fig 3".to_string(),
+                ..Default::default()
+            },
+        ];
+
+        let to_copy = vec![(
+            PathBuf::from("/src/f1.png"),
+            PathBuf::from("/dst/cardio_f1.png"),
+            "cardio_f1.png".to_string(),
+        )];
+
+        let existing_missing = vec![json!({
+            "namespaced": "cardio_f3.png",
+            "caption": "Fig 3",
+        })];
+
+        let rollback_missing = collect_rollback_missing(&to_copy, &entries, &existing_missing);
+
+        let names: Vec<&str> = rollback_missing
+            .iter()
+            .filter_map(|m| m.get("namespaced").and_then(|v| v.as_str()))
+            .collect();
+
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"cardio_f1.png"));
+        assert!(names.contains(&"cardio_f3.png"));
+        assert!(!names.contains(&"cardio_f2.png"));
+    }
+
+    #[test]
+    fn test_markdown_catalog_parser_and_sibling_json_promotion() {
+        let md_content = r#"
+| Arquivo | Legenda | Slug | Noise |
+| :--- | :--- | :--- | :--- |
+| ![img](ct_brain.png) | Tomografia de crânio | neuro | false |
+| `angio.png` | Figura 1 da página 5 | vascular | |
+| ![img](<xray.png>) | Radiografia de tórax | pneumo | true |
+"#;
+        let entries = parse_markdown_catalog(md_content, "default").unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].filename, "ct_brain.png");
+        assert_eq!(entries[0].namespaced, "neuro_ct_brain.png");
+        assert_eq!(entries[0].caption, "Tomografia de crânio");
+        assert!(!entries[0].noise);
+
+        assert_eq!(entries[1].filename, "angio.png");
+        assert_eq!(entries[1].namespaced, "vascular_angio.png");
+        assert!(entries[1].noise); // Detected via auto_generated_caption
+
+        assert_eq!(entries[2].filename, "xray.png");
+        assert_eq!(entries[2].namespaced, "pneumo_xray.png");
+        assert!(entries[2].noise); // Explicit noise column
+
+        // Sibling promotion
+        let dir = tempdir().unwrap();
+        let md_path = dir.path().join("catalog.md");
+        let json_path = dir.path().join("catalog.json");
+
+        fs::write(
+            &md_path,
+            "| Arquivo | Legenda |\n| --- | --- |\n| md_img.png | Da MD |\n",
+        )
+        .unwrap();
+        fs::write(
+            &json_path,
+            r#"{"slug":"promoted","items":[{"filename":"json_img.png","caption":"Do JSON"}]}"#,
+        )
+        .unwrap();
+
+        let loaded_promoted = load_catalog(&md_path).unwrap();
+        assert_eq!(loaded_promoted.len(), 1);
+        assert_eq!(loaded_promoted[0].filename, "json_img.png");
+
+        // When sibling json does not exist, md is parsed
+        fs::remove_file(&json_path).unwrap();
+        let loaded_md = load_catalog(&md_path).unwrap();
+        assert_eq!(loaded_md.len(), 1);
+        assert_eq!(loaded_md[0].filename, "md_img.png");
+    }
+
+    #[test]
+    fn test_security_validation_hardened() {
+        // Empty / whitespace / dots
+        assert!(validate_filename_security("").is_err());
+        assert!(validate_filename_security("   ").is_err());
+        assert!(validate_filename_security(".").is_err());
+        assert!(validate_filename_security("..").is_err());
+
+        // Path separators / traversal
+        assert!(validate_filename_security("foo/bar.png").is_err());
+        assert!(validate_filename_security("foo\\bar.png").is_err());
+        assert!(validate_filename_security("dir/..").is_err());
+
+        // Windows drive prefix
+        assert!(validate_filename_security("C:image.png").is_err());
+        assert!(validate_filename_security("d:file.jpg").is_err());
+
+        // Windows forbidden chars
+        for ch in ['<', '>', ':', '"', '|', '?', '*'] {
+            let bad = format!("file{ch}name.png");
+            assert!(
+                validate_filename_security(&bad).is_err(),
+                "char '{ch}' should be rejected"
+            );
+        }
+        assert!(validate_filename_security("file\u{0007}.png").is_err());
+
+        // Trailing space or dot
+        assert!(validate_filename_security("image.png ").is_err());
+        assert!(validate_filename_security("image.png.").is_err());
+
+        // Reserved DOS device names
+        assert!(validate_filename_security("aux").is_err());
+        assert!(validate_filename_security("prn.txt").is_err());
+        assert!(validate_filename_security("com1.png").is_err());
+        assert!(validate_filename_security("lpt3.jpg").is_err());
+        assert!(validate_filename_security("NUL.dat").is_err());
+        assert!(validate_filename_security("con .txt").is_err());
+
+        // Valid
+        assert!(validate_filename_security("normal_image-01.png").is_ok());
+        assert!(validate_filename_security("ECG_12_leads.jpeg").is_ok());
     }
 }

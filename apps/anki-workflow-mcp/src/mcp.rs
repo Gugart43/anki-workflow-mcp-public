@@ -22,19 +22,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 pub use crate::export::ExportReviewedFilesArgs;
-use crate::export::execute_export_reviewed_files;
+use crate::export::{ExportError, ExportReviewedFilesResult, execute_export_reviewed_files};
 
 const SERVER_INSTRUCTIONS: &str = "\
-Stateless MCP stdio validation and quality evaluation server for Anki QA/Cloze batches. \
+MCP stdio validation, quality evaluation, and transactional export server for Anki QA/Cloze batches (7 tools). \
 Call `generation_contract_get` first with `{}` to read the full `quality_v1` workflow, \
 per-retrieval rubric, field ordering, repair protocol, and limitations. \
 Use `cards_compile_drafts` to compile normalized drafts into canonical QA/Cloze CSVs, \
 `review_batch_information` for per-card information profiles (`no_count_only_limit: true`, no fixed 20-card ceiling), \
 `quality_prepare` to build a snapshot hash and per-retrieval inventory, \
 `quality_evaluate` to evaluate bindings and independent editorial reviews against that snapshot, \
-and `batch_patch_draft` for pure in-memory `{draft, updates} -> {card}` patching \
-(distinct from the path-based Python staging file API). \
-Technical validation or `PASS` is never proof of clinical truth or permission to export; \
+`batch_patch_draft` for pure in-memory `{draft, updates} -> {card}` patching \
+(distinct from the path-based Python staging file API), \
+and `export_reviewed_files` for local transactional CSV export with cross-process locking and idempotent state-ledger persistence \
+(requires exact `PASS` verdict and verified SHA-256 `receipt_hash`). \
+Technical validation or `PASS` is never proof of clinical truth; \
 `INCOMPLETE` never authorizes export.";
 
 #[derive(Debug, Clone, Default)]
@@ -681,9 +683,9 @@ fn generation_contract_payload() -> Value {
             ]
         },
         "limitations": [
-            "Pure stateless stdio binary: no disk persistence, no manifesto/SQLite state, no network calls, and no `.apkg`/file export.",
+            "Local stdio binary exposing 7 tools: 6 pure in-memory validation/evaluation/contract tools and `export_reviewed_files` for local transactional CSV persistence (`exports/` + `.anki-workflow-export-state.json` ledger with cross-process locking); no SQLite/manifesto database, no network calls, and no `.apkg` packaging.",
             "`batch_patch_draft` operates purely in memory (`{draft, updates} -> {card}`) and is NOT the path-based Python staging file API.",
-            "Technical `PASS` from compilation, structural checks, or information review is NOT proof of clinical truth, source fidelity, or permission to export.",
+            "Technical `PASS` from compilation, structural checks, or information review is NOT proof of clinical truth or source fidelity; `export_reviewed_files` still requires exact `PASS` verdict, valid SHA-256 `receipt_hash`, and fail-closed CSV/HTML revalidation.",
             "`INCOMPLETE` means required inputs, bindings, or independent reviews are missing or stale and NEVER authorizes export.",
             "No invented medical examples or private deck data are embedded in this contract."
         ],
@@ -727,9 +729,44 @@ impl ServerHandler for AnkiQualityMcpServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + Send + '_ {
-        let result = dispatch_tool_call(request);
-        std::future::ready(result)
+        dispatch_tool_call_async(request)
     }
+}
+
+fn map_export_result(result: Result<ExportReviewedFilesResult, ExportError>) -> CallToolResponse {
+    match result {
+        Ok(res) => match serde_json::to_value(&res) {
+            Ok(val) => tool_ok(val),
+            Err(err) => tool_error(format!("Failed to serialize export result: {err}")),
+        },
+        Err(err) => tool_error_payload(ToolErrorPayload {
+            error: sanitize_error_text(&err.message),
+            code: err.code,
+            violations: Vec::new(),
+        }),
+    }
+}
+
+async fn dispatch_tool_call_async(
+    request: CallToolRequestParams,
+) -> Result<CallToolResponse, ErrorData> {
+    if request.name.as_ref() == "export_reviewed_files" {
+        let args: ExportReviewedFilesArgs = match parse_args(request.arguments) {
+            Ok(parsed) => parsed,
+            Err(msg) => return Ok(tool_error(msg)),
+        };
+        let export_result =
+            tokio::task::spawn_blocking(move || execute_export_reviewed_files(&args)).await;
+        return Ok(match export_result {
+            Ok(res) => map_export_result(res),
+            Err(join_err) => tool_error_payload(ToolErrorPayload {
+                error: sanitize_error_text(&format!("Export blocking task failed: {join_err}")),
+                code: "EXPORT.TASK_JOIN_ERROR",
+                violations: Vec::new(),
+            }),
+        });
+    }
+    dispatch_tool_call(request)
 }
 
 fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse, ErrorData> {
@@ -837,19 +874,7 @@ fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse
                 Ok(parsed) => parsed,
                 Err(msg) => return Ok(tool_error(msg)),
             };
-            match execute_export_reviewed_files(&args) {
-                Ok(res) => match serde_json::to_value(&res) {
-                    Ok(val) => Ok(tool_ok(val)),
-                    Err(err) => Ok(tool_error(format!(
-                        "Failed to serialize export result: {err}"
-                    ))),
-                },
-                Err(err) => Ok(tool_error_payload(ToolErrorPayload {
-                    error: err.message,
-                    code: err.code,
-                    violations: Vec::new(),
-                })),
-            }
+            Ok(map_export_result(execute_export_reviewed_files(&args)))
         }
         unknown => Err(ErrorData::new(
             ErrorCode::INVALID_PARAMS,
@@ -1189,5 +1214,82 @@ mod tests {
         assert_eq!(vios.len(), 2);
         assert_eq!(vios[0]["code"], json!("INVALID_CLOZE_INDEX"));
         assert_eq!(vios[1]["code"], json!("MISSING_CLOZE_INDEX"));
+    }
+
+    #[test]
+    fn server_instructions_and_contract_reflect_seven_tools_and_local_export() {
+        assert!(SERVER_INSTRUCTIONS.contains("7 tools"));
+        assert!(SERVER_INSTRUCTIONS.contains("export_reviewed_files"));
+        assert!(SERVER_INSTRUCTIONS.contains("local transactional CSV export"));
+        assert!(!SERVER_INSTRUCTIONS.contains("Stateless MCP stdio"));
+
+        let server = AnkiQualityMcpServer::new();
+        let info = server.get_info();
+        let info_json = serde_json::to_value(&info).expect("serialize server info");
+        assert_eq!(info_json["instructions"], json!(SERVER_INSTRUCTIONS));
+
+        let contract = generation_contract_payload();
+        let limitations = contract["limitations"]
+            .as_array()
+            .expect("limitations array");
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("Local stdio binary exposing 7 tools")
+        }));
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("export_reviewed_files")
+        }));
+        assert!(!limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("Pure stateless stdio binary")
+        }));
+        assert!(limitations.iter().any(|l| {
+            l.as_str()
+                .unwrap_or_default()
+                .contains("fail-closed CSV/HTML revalidation")
+        }));
+    }
+
+    #[tokio::test]
+    async fn export_reviewed_files_uses_spawn_blocking_and_sanitizes_error_messages() {
+        let raw_err = ExportError::new(
+            "EXPORT.VALIDATION_FAIL",
+            "Error with\nembedded\r\nnewlines\tand    tabs",
+        );
+        let mapped = map_export_result(Err(raw_err));
+        assert!(is_error_response(&mapped));
+        let payload = extract_error_payload(&mapped);
+        assert_eq!(payload["code"], json!("EXPORT.VALIDATION_FAIL"));
+        assert_eq!(
+            payload["error"],
+            json!("Error with embedded newlines and tabs")
+        );
+
+        let call = make_call(
+            "export_reviewed_files",
+            json!({
+                "deck_dir": "target/test_export_dir",
+                "batch_id": "batch\nwith\r\nnewlines",
+                "qa_csv": "qa",
+                "cloze_csv": "cloze",
+                "receipt_hash": "invalid_hash",
+                "evaluation_verdict": "REVISE"
+            }),
+        );
+        let async_resp = dispatch_tool_call_async(call)
+            .await
+            .expect("dispatch_tool_call_async should complete");
+        assert!(is_error_response(&async_resp));
+        let async_payload = extract_error_payload(&async_resp);
+        assert_eq!(async_payload["code"], json!("EXPORT.INVALID_BATCH_ID"));
+        let err_text = async_payload["error"].as_str().unwrap_or_default();
+        assert!(!err_text.contains('\n'));
+        assert!(!err_text.contains('\r'));
+        assert!(!err_text.contains('\t'));
+        assert!(err_text.contains("batch_id inválido 'batch with newlines'"));
     }
 }

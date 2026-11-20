@@ -5,7 +5,7 @@
 //! - Exact evaluation verdict requirement (`PASS` exact);
 //! - Fail-closed revalidation of CSV structure via `anki_validate::check_csv` and unsafe HTML via `anki_validate::prepare_quality`;
 //! - Rejection of path traversal (`..`), invalid slug characters, Windows/POSIX reserved filenames, and symlink targets;
-//! - Cross-process exclusive file locking (`fs2::FileExt::lock_exclusive`) spanning ledger read, idempotency check, and write/swap;
+//! - Cross-process exclusive file locking (`fs2::FileExt::try_lock_exclusive` with bounded timeout) spanning ledger read, idempotency check, and write/swap;
 //! - Same-filesystem staging and backup paths;
 //! - RAII reverse rollback in `AtomicSwapGuard::drop` preserving recovery backups if restoration fails;
 //! - Idempotent replay recording and verification of actual mirror configuration and existing on-disk files/hashes;
@@ -21,7 +21,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use schemars::JsonSchema;
@@ -30,6 +30,8 @@ use sha2::{Digest, Sha256};
 
 pub const EXPORT_STATE_FILE: &str = ".anki-workflow-export-state.json";
 pub const EXPORT_LOCK_FILE: &str = ".anki_workflow_export.lock";
+pub const EXPORT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const EXPORT_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -186,20 +188,85 @@ fn check_not_symlink(path: &Path) -> Result<(), ExportError> {
     Ok(())
 }
 
-fn replace_file(src: &Path, dst: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        if dst.exists() || dst.symlink_metadata().is_ok() {
-            let _ = fs::remove_file(dst);
+fn is_lock_contended(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::WouldBlock
+        || (err.raw_os_error().is_some()
+            && err.raw_os_error() == fs2::lock_contended_error().raw_os_error())
+}
+
+fn acquire_exclusive_lock_with_timeout(
+    lock_file: &File,
+    timeout: Duration,
+) -> Result<(), ExportError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match lock_file.try_lock_exclusive() {
+            Ok(()) => return Ok(()),
+            Err(err) if is_lock_contended(&err) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return Err(ExportError::new(
+                        "EXPORT.LOCK_TIMEOUT",
+                        format!(
+                            "Timed out after {}ms waiting for exclusive export lock",
+                            timeout.as_millis()
+                        ),
+                    ));
+                }
+                let remaining = deadline.saturating_duration_since(now);
+                std::thread::sleep(EXPORT_LOCK_POLL_INTERVAL.min(remaining));
+            }
+            Err(err) => {
+                return Err(ExportError::new(
+                    "EXPORT.LOCK_ERROR",
+                    format!("Failed to acquire exclusive cross-process lock: {err}"),
+                ));
+            }
         }
     }
+}
+
+fn cross_device_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let dst_dir = dst
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let seq = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dst_name = dst.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let tmp_path = dst_dir.join(format!(".tmp_xdev_{dst_name}_{}_{seq}", std::process::id()));
+
+    let copy_res = (|| -> std::io::Result<()> {
+        let mut reader = File::open(src)?;
+        let mut writer = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)?;
+        std::io::copy(&mut reader, &mut writer)?;
+        writer.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(err) = copy_res {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = fs::rename(&tmp_path, dst) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    let _ = fs::remove_file(src);
+    Ok(())
+}
+
+fn replace_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     match fs::rename(src, dst) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            fs::copy(src, dst)?;
-            let _ = fs::remove_file(src);
-            Ok(())
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {
+            cross_device_replace(src, dst)
         }
+        Err(err) => Err(err),
     }
 }
 
@@ -469,6 +536,7 @@ pub fn execute_export_reviewed_files(
 
     // 7. Cross-process exclusive lock spanning ledger read, idempotency, and writes
     let lock_path = exports_dir.join(EXPORT_LOCK_FILE);
+    check_not_symlink(&lock_path)?;
     let lock_file = fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -482,12 +550,7 @@ pub fn execute_export_reviewed_files(
             )
         })?;
 
-    lock_file.lock_exclusive().map_err(|e| {
-        ExportError::new(
-            "EXPORT.LOCK_ERROR",
-            format!("Failed to acquire exclusive cross-process lock: {e}"),
-        )
-    })?;
+    acquire_exclusive_lock_with_timeout(&lock_file, EXPORT_LOCK_TIMEOUT)?;
 
     // 8. Target filenames and symlink checks
     let prefix = args.topic_slug.as_deref().unwrap_or(args.batch_id.as_str());
@@ -532,6 +595,24 @@ pub fn execute_export_reviewed_files(
             return Err(ExportError::new(
                 "EXPORT.BATCH_CONFLICT",
                 format!("Batch '{}' já exportado com outro hash.", args.batch_id),
+            ));
+        }
+        if existing.topic_slug != args.topic_slug {
+            return Err(ExportError::new(
+                "EXPORT.BATCH_CONFLICT",
+                format!(
+                    "Batch '{}' já exportado com topic_slug diferente ({:?} vs {:?}).",
+                    args.batch_id, existing.topic_slug, args.topic_slug
+                ),
+            ));
+        }
+        if existing.root_mirror_written != args.write_to_deck_root {
+            return Err(ExportError::new(
+                "EXPORT.BATCH_CONFLICT",
+                format!(
+                    "Batch '{}' já exportado com write_to_deck_root={} (solicitado {}).",
+                    args.batch_id, existing.root_mirror_written, args.write_to_deck_root
+                ),
             ));
         }
         if existing.state != "exported" {
@@ -989,5 +1070,96 @@ mod tests {
         let raw = fs::read_to_string(&state_path).unwrap();
         let ledger: ExportStateLedger = serde_json::from_str(&raw).unwrap();
         assert_eq!(ledger.batches.len(), 5);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_lock_file_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = TempDir::new().unwrap();
+        let exports_dir = tmp.path().join("exports");
+        fs::create_dir_all(&exports_dir).unwrap();
+        let target = tmp.path().join("fake_lock_target");
+        fs::write(&target, b"").unwrap();
+        let lock_path = exports_dir.join(EXPORT_LOCK_FILE);
+        symlink(&target, &lock_path).unwrap();
+
+        let args = create_test_args(tmp.path(), "batch_symlink_lock");
+        let err = execute_export_reviewed_files(&args).unwrap_err();
+        assert_eq!(err.code, "EXPORT.SYMLINK_TARGET");
+    }
+
+    #[test]
+    fn test_lock_timeout_returns_export_lock_timeout() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join("test.lock");
+        let handle1 = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+
+        handle1.lock_exclusive().unwrap();
+
+        let handle2 = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+
+        let start = Instant::now();
+        let err =
+            acquire_exclusive_lock_with_timeout(&handle2, Duration::from_millis(60)).unwrap_err();
+        let elapsed = start.elapsed();
+
+        assert_eq!(err.code, "EXPORT.LOCK_TIMEOUT");
+        assert!(elapsed >= Duration::from_millis(50));
+        drop(handle1);
+    }
+
+    #[test]
+    fn test_replace_file_rejects_non_exdev_and_cross_device_replace_is_atomic() {
+        let tmp = TempDir::new().unwrap();
+        let non_existent = tmp.path().join("non_existent.txt");
+        let dst = tmp.path().join("dst.txt");
+
+        let res = replace_file(&non_existent, &dst);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        assert!(!dst.exists());
+
+        let src = tmp.path().join("src_file.txt");
+        fs::write(&src, b"cross device payload").unwrap();
+        let target = tmp.path().join("target_file.txt");
+        fs::write(&target, b"old target payload").unwrap();
+
+        cross_device_replace(&src, &target).unwrap();
+        assert!(!src.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"cross device payload");
+    }
+
+    #[test]
+    fn test_replay_divergent_topic_slug_or_root_mirror_returns_batch_conflict() {
+        let tmp = TempDir::new().unwrap();
+        let mut args1 = create_test_args(tmp.path(), "batch_divergent");
+        args1.topic_slug = Some("original_slug".to_string());
+        args1.write_to_deck_root = true;
+        let res = execute_export_reviewed_files(&args1).unwrap();
+        assert_eq!(res.status, ExportStatus::Exported);
+
+        let mut args2 = args1.clone();
+        args2.topic_slug = Some("other_slug".to_string());
+        let err2 = execute_export_reviewed_files(&args2).unwrap_err();
+        assert_eq!(err2.code, "EXPORT.BATCH_CONFLICT");
+        assert!(err2.message.contains("topic_slug diferente"));
+
+        let mut args3 = args1.clone();
+        args3.write_to_deck_root = false;
+        let err3 = execute_export_reviewed_files(&args3).unwrap_err();
+        assert_eq!(err3.code, "EXPORT.BATCH_CONFLICT");
+        assert!(err3.message.contains("write_to_deck_root"));
     }
 }

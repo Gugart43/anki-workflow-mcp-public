@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use anki_domain::{CsvRowNumber, Diagnostic, DiagnosticCode, Severity};
 use regex::Regex;
 
-use crate::html_text::strip_table_blocks;
+use crate::html_text::{strip_table_blocks, visible_char_count};
 
 pub const MAX_COLS: usize = 4;
 pub const MAX_BODY_ROWS: usize = 8;
@@ -105,7 +105,7 @@ struct TableHtmlParser<'a> {
     tag_stack: Vec<String>,
     table_stack: Vec<TableState>,
     has_table: bool,
-    cell_chars_stack: Vec<usize>,
+    cell_chars_stack: Vec<String>,
 }
 
 impl<'a> TableHtmlParser<'a> {
@@ -236,7 +236,7 @@ impl<'a> TableHtmlParser<'a> {
                         Some("Check table cell placement".to_string()),
                     );
                 }
-                self.cell_chars_stack.push(0);
+                self.cell_chars_stack.push(String::new());
 
                 let mut colspan = 1usize;
                 let mut rowspan = 1usize;
@@ -257,6 +257,7 @@ impl<'a> TableHtmlParser<'a> {
                     }
                 }
 
+                let mut collided_col: Option<usize> = None;
                 if let Some(state) = self.table_stack.last_mut() {
                     if tag_lower == "th" {
                         state.current_row_has_th = true;
@@ -271,12 +272,27 @@ impl<'a> TableHtmlParser<'a> {
                     let cell_col_start = state.current_col_idx;
                     for c in 0..colspan {
                         let col = cell_col_start + c;
-                        state.current_row_occupied_cols.insert(col);
+                        if !state.current_row_occupied_cols.insert(col) && collided_col.is_none() {
+                            collided_col = Some(col);
+                        }
                         if rowspan > 1 {
                             state.current_row_new_rowspans.push((col, rowspan - 1));
                         }
                     }
                     state.current_col_idx = cell_col_start + colspan;
+                }
+                if let Some(col) = collided_col {
+                    self.emit(
+                        CODE_TBL_MALFORMED,
+                        Severity::Critical,
+                        format!(
+                            "Cell colspan={colspan} overlaps an active rowspan at column {}",
+                            col + 1
+                        ),
+                        Some(
+                            "Adjust colspan/rowspan attributes so cells do not overlap".to_string(),
+                        ),
+                    );
                 }
                 self.tag_stack.push(tag_lower);
             }
@@ -285,8 +301,8 @@ impl<'a> TableHtmlParser<'a> {
     }
 
     fn handle_data(&mut self, data: &str) {
-        if let Some(chars) = self.cell_chars_stack.last_mut() {
-            *chars += data.chars().count();
+        if let Some(cell_buf) = self.cell_chars_stack.last_mut() {
+            cell_buf.push_str(data);
         }
     }
 
@@ -304,13 +320,16 @@ impl<'a> TableHtmlParser<'a> {
                 Some("Ensure all table tags are matched and closed in proper order".to_string()),
             );
             if self.tag_stack.iter().any(|t| t == &tag_lower) {
-                while let Some(top) = self.tag_stack.last() {
-                    if top == &tag_lower {
+                while let Some(top) = self.tag_stack.pop() {
+                    if matches!(top.as_str(), "td" | "th") {
+                        self.cell_chars_stack.pop();
+                    } else if top == "table" {
+                        self.table_stack.pop();
+                    }
+                    if top == tag_lower {
                         break;
                     }
-                    self.tag_stack.pop();
                 }
-                self.tag_stack.pop();
             }
             return;
         }
@@ -319,17 +338,25 @@ impl<'a> TableHtmlParser<'a> {
 
         match tag_lower.as_str() {
             "th" | "td" => {
-                if let Some(chars) = self.cell_chars_stack.pop()
-                    && chars > MAX_CELL_CHARS
-                {
-                    self.emit(
-                        CODE_TBL_CELL_TOO_LONG,
-                        Severity::Warn,
-                        format!("Table cell text too long ({chars} chars, max {MAX_CELL_CHARS})"),
-                        Some(format!(
-                            "Shorten table cell content to <= {MAX_CELL_CHARS} visible characters"
-                        )),
-                    );
+                if let Some(cell_text) = self.cell_chars_stack.pop() {
+                    let chars = visible_char_count(&cell_text);
+                    if chars > MAX_CELL_CHARS {
+                        self.emit(
+                            CODE_TBL_CELL_TOO_LONG,
+                            Severity::Warn,
+                            format!(
+                                "Table cell text too long ({chars} chars, max {MAX_CELL_CHARS})"
+                            ),
+                            Some(format!(
+                                "Shorten table cell content to <= {MAX_CELL_CHARS} visible characters"
+                            )),
+                        );
+                    }
+                }
+            }
+            "thead" | "tbody" | "tfoot" => {
+                if let Some(state) = self.table_stack.last_mut() {
+                    state.pending_rowspans.clear();
                 }
             }
             "tr" => {
@@ -459,19 +486,28 @@ impl<'a> TableHtmlParser<'a> {
                 }
 
                 if let Some(parsed) = parse_tag_at(&html[pos..]) {
+                    let raw_tag = &html[pos..pos + parsed.consumed];
                     match parsed.kind {
                         TagKind::Start {
                             name,
                             attrs,
                             self_closing,
                         } => {
-                            self.handle_starttag(&name, &attrs);
-                            if self_closing {
-                                self.handle_endtag(&name);
+                            if is_table_tag(&name.to_ascii_lowercase()) {
+                                self.handle_starttag(&name, &attrs);
+                                if self_closing {
+                                    self.handle_endtag(&name);
+                                }
+                            } else {
+                                self.handle_data(raw_tag);
                             }
                         }
                         TagKind::End { name } => {
-                            self.handle_endtag(&name);
+                            if is_table_tag(&name.to_ascii_lowercase()) {
+                                self.handle_endtag(&name);
+                            } else {
+                                self.handle_data(raw_tag);
+                            }
                         }
                     }
                     pos += parsed.consumed;
@@ -886,5 +922,63 @@ com mais um:
             .collect();
         assert_eq!(long_diags.len(), 1);
         assert_eq!(long_diags[0].severity, Severity::Warn);
+    }
+
+    #[test]
+    fn table_cell_too_long_uses_visible_char_count_for_entities_and_inline_html() {
+        let body = format!("   <b>{}</b>&rarr;   ", "a".repeat(115));
+        let html = format!(
+            "<table><thead><tr><th>Col</th></tr></thead><tbody><tr><td>{body}</td></tr></tbody></table>"
+        );
+        let diags = check_tables_field(&html, "Notas Adicionais", Some(2), false);
+        assert!(
+            !diags.iter().any(|d| d.code == CODE_TBL_CELL_TOO_LONG),
+            "cell with <= 120 visible chars should not emit TBL.CELL_TOO_LONG: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn tr_recovery_syncs_cell_chars_stack_on_unclosed_td() {
+        let unclosed_text = "x".repeat(90);
+        let next_cell_text = "y".repeat(50);
+        let html = format!(
+            "<table><thead><tr><th>Col</th></tr></thead><tbody><tr><td>{unclosed_text}</tr><tr><td>{next_cell_text}</td></tr></tbody></table>"
+        );
+        let diags = check_tables_field(&html, "Notas Adicionais", Some(2), false);
+        assert!(diags.iter().any(|d| d.code == CODE_TBL_MALFORMED));
+        assert!(
+            !diags.iter().any(|d| d.code == CODE_TBL_CELL_TOO_LONG),
+            "unclosed <td> text must not bleed into subsequent cells: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn pending_rowspans_reset_at_section_boundary() {
+        let html = r#"<table>
+<thead><tr><th rowspan="2">A</th><th>B</th></tr></thead>
+<tbody><tr><td>1</td><td>2</td></tr></tbody>
+</table>"#;
+        let diags = check_tables_field(html, "Notas Adicionais", Some(2), false);
+        assert!(
+            !diags.iter().any(|d| d.code == CODE_TBL_RAGGED),
+            "rowspan in <thead> must not leak into <tbody>: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn detects_colspan_overlapping_active_rowspan() {
+        let html = r#"<table>
+<thead><tr><th>A</th><th>B</th><th>C</th></tr></thead>
+<tbody>
+<tr><td>1</td><td rowspan="2">2</td><td>3</td></tr>
+<tr><td colspan="2">Overlap</td><td>4</td></tr>
+</tbody>
+</table>"#;
+        let diags = check_tables_field(html, "Notas Adicionais", Some(2), false);
+        assert!(
+            diags.iter().any(|d| d.code == CODE_TBL_MALFORMED
+                && d.message.contains("overlaps an active rowspan")),
+            "expected colspan/rowspan overlap diagnostic, got: {diags:?}"
+        );
     }
 }

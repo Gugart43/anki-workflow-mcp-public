@@ -77,6 +77,7 @@ test("validatePackageIntegrity verifies Cargo.toml and package.json versions and
     dependencies: {},
     optionalDependencies: {
       "@gugart43/anki-workflow-mcp-linux-x64-gnu": "0.1.0",
+      "@gugart43/anki-workflow-mcp-linux-arm64-gnu": "0.1.0",
       "@gugart43/anki-workflow-mcp-win32-x64": "0.1.0",
       "@gugart43/anki-workflow-mcp-darwin-arm64": "0.1.0",
       "@gugart43/anki-workflow-mcp-darwin-x64": "0.1.0",
@@ -185,9 +186,10 @@ test("full staging run generates complete platform and main packages with checks
     const outDir = path.join(tmpDir, "staged");
     fs.mkdirSync(distDir, { recursive: true });
 
-    // Create 4 synthetic platform archives
+    // Create 5 synthetic platform archives
     const targets = [
       { target: "x86_64-unknown-linux-gnu", bin: "anki-workflow-mcp", ext: "tar.gz" },
+      { target: "aarch64-unknown-linux-gnu", bin: "anki-workflow-mcp", ext: "tar.gz" },
       { target: "x86_64-pc-windows-msvc", bin: "anki-workflow-mcp.exe", ext: "zip" },
       { target: "aarch64-apple-darwin", bin: "anki-workflow-mcp", ext: "tar.gz" },
       { target: "x86_64-apple-darwin", bin: "anki-workflow-mcp", ext: "tar.gz" },
@@ -234,7 +236,7 @@ test("full staging run generates complete platform and main packages with checks
     );
 
     assert.equal(res.status, 0, `Staging script failed: ${res.stderr}`);
-    assert.ok(res.stdout.includes("Staged 4 platform packages"));
+    assert.ok(res.stdout.includes("Staged 5 platform packages"));
 
     // Verify main package staged files
     const mainDir = path.join(outDir, "main");
@@ -244,11 +246,11 @@ test("full staging run generates complete platform and main packages with checks
 
     const checksums = JSON.parse(fs.readFileSync(path.join(mainDir, "checksums.json"), "utf8"));
     assert.equal(checksums.version, "0.1.0");
-    assert.equal(Object.keys(checksums.packages).length, 4);
+    assert.equal(Object.keys(checksums.packages).length, 5);
 
     // Verify platform packages
     const platformsDir = path.join(outDir, "platforms");
-    for (const slug of ["linux-x64-gnu", "win32-x64", "darwin-arm64", "darwin-x64"]) {
+    for (const slug of ["linux-x64-gnu", "linux-arm64-gnu", "win32-x64", "darwin-arm64", "darwin-x64"]) {
       const pkgDir = path.join(platformsDir, slug);
       assert.ok(fs.existsSync(path.join(pkgDir, "package.json")));
       assert.ok(fs.existsSync(path.join(pkgDir, "README.md")));

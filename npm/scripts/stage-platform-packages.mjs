@@ -27,6 +27,17 @@ export const PLATFORMS = Object.freeze([
     description: "Linux x64 (glibc) native binary for @gugart43/anki-workflow-mcp.",
   },
   {
+    slug: "linux-arm64-gnu",
+    pkgName: "@gugart43/anki-workflow-mcp-linux-arm64-gnu",
+    rustTarget: "aarch64-unknown-linux-gnu",
+    archiveExt: "tar.gz",
+    binaryName: "anki-workflow-mcp",
+    os: ["linux"],
+    cpu: ["arm64"],
+    libc: ["glibc"],
+    description: "Linux arm64 (glibc) native binary for @gugart43/anki-workflow-mcp.",
+  },
+  {
     slug: "win32-x64",
     pkgName: "@gugart43/anki-workflow-mcp-win32-x64",
     rustTarget: "x86_64-pc-windows-msvc",
@@ -388,7 +399,7 @@ export function main() {
   );
 
   process.stdout.write(
-    `Staged 4 platform packages and @gugart43/anki-workflow-mcp@${version} into ${outDir}\n`
+    `Staged ${PLATFORMS.length} platform packages and @gugart43/anki-workflow-mcp@${version} into ${outDir}\n`
   );
 }
 

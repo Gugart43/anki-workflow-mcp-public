@@ -327,7 +327,8 @@ fn find_balanced_tag_end(raw: &str, start_pos: usize, target_tag: &str) -> Optio
     None
 }
 
-fn try_decode_entity(s: &str) -> Option<(char, usize)> {
+#[must_use]
+pub(crate) fn try_decode_entity(s: &str) -> Option<(char, usize)> {
     let bytes = s.as_bytes();
     if bytes.first() != Some(&b'&') {
         return None;
@@ -371,18 +372,31 @@ fn try_decode_entity(s: &str) -> Option<(char, usize)> {
             "gt" => '>',
             "quot" => '"',
             "apos" => '\'',
-            "nbsp" => ' ',
+            "nbsp" => '\u{00A0}',
             "ndash" => '\u{2013}',
             "mdash" => '\u{2014}',
             "bull" => '•',
             "rarr" => '\u{2192}',
             "larr" => '\u{2190}',
+            "uarr" => '\u{2191}',
+            "darr" => '\u{2193}',
+            "harr" => '\u{2194}',
+            "rArr" => '\u{21D2}',
             "le" => '≤',
             "ge" => '≥',
+            "ne" => '\u{2260}',
+            "asymp" => '\u{2248}',
             "plusmn" => '±',
             "times" => '×',
             "divide" => '÷',
             "deg" => '°',
+            "sup2" => '\u{00B2}',
+            "sup3" => '\u{00B3}',
+            "alpha" => '\u{03B1}',
+            "beta" => '\u{03B2}',
+            "gamma" => '\u{03B3}',
+            "delta" => '\u{03B4}',
+            "Delta" => '\u{0394}',
             "mu" => '\u{03BC}',
             "micro" => '\u{00B5}',
             "hellip" => '…',
@@ -420,6 +434,12 @@ mod tests {
     fn parse_decodes_named_and_numeric_entities() {
         let raw = "&amp;&lt;&gt;&quot;&apos;&nbsp;&ndash;&mdash;&rarr;&larr;&le;&ge;&plusmn;&times;&divide;&deg;&mu;&#124;&#x7C;";
         assert_eq!(parse_html_text(raw).0, "&<>\"' –—→←≤≥±×÷°μ||");
+    }
+
+    #[test]
+    fn parse_decodes_clinical_entities() {
+        let raw = "&rarr;&uarr;&darr;&harr;&rArr;&plusmn;&mu;&deg;&alpha;&beta;&gamma;&delta;&Delta;&ndash;&bull;&ne;&asymp;&sup2;&sup3;";
+        assert_eq!(parse_html_text(raw).0, "→↑↓↔⇒±μ°αβγδΔ–•≠≈²³");
     }
 
     #[test]

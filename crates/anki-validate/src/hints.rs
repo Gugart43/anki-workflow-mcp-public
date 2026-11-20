@@ -31,6 +31,54 @@ pub const COMMON_MODIFIERS: &[&str] = &[
     "monitorado",
 ];
 
+/// Clinical units and administration routes allowed in unit/route hints
+/// without triggering `HINT.ROOT_LEAK` when they are not the sole target.
+pub const CLINICAL_UNIT_ROUTE_ALLOWLIST: &[&str] = &["UI", "mEq", "IV", "EV", "VO", "SC", "IM"];
+
+const UNIT_ROUTE_HINT_MARKERS: &[&str] = &[
+    "unidade",
+    "unidades",
+    "unit",
+    "units",
+    "dose",
+    "doses",
+    "posologia",
+    "concentracao",
+    "volume",
+    "taxa",
+    "velocidade",
+    "via",
+    "vias",
+    "route",
+    "administracao",
+    "infusao",
+    "bolus",
+    "ataque",
+    "manutencao",
+    "esquema",
+    "terapia",
+];
+
+fn is_clinical_unit_or_route(acr: &str) -> bool {
+    CLINICAL_UNIT_ROUTE_ALLOWLIST
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(acr))
+}
+
+fn is_unit_or_route_hint(hint: &str) -> bool {
+    if hint.contains('/') {
+        return true;
+    }
+    let norm = normalize_hint_text(hint);
+    let tokens: Vec<&str> = norm.split_whitespace().collect();
+    if tokens.len() <= 2 && tokens.iter().any(|tok| is_clinical_unit_or_route(tok)) {
+        return true;
+    }
+    tokens
+        .iter()
+        .any(|tok| UNIT_ROUTE_HINT_MARKERS.contains(tok))
+}
+
 static ELIMINATION_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)\b(ou|or|e/ou|and/or)\b.{0,20}\b(sim|não|yes|no|masculino|feminino|male|female|ieca|bra|bcc|ara|aines|aas)\b|\b(sim|não|yes|no|masculino|feminino|male|female)\b.{0,20}\b(ou|or)\b",
@@ -68,8 +116,15 @@ pub fn shares_inflected_root(a: &str, b: &str) -> bool {
 /// 3-4 letter acronyms match case-insensitively.
 #[must_use]
 pub fn has_acronym_leak(target: &str, hint: &str) -> bool {
+    let target_trimmed = target.trim();
     for mat in SHORT_ACRONYM_RE.find_iter(target) {
         let acr = mat.as_str();
+        if is_clinical_unit_or_route(acr)
+            && !target_trimmed.eq_ignore_ascii_case(acr)
+            && is_unit_or_route_hint(hint)
+        {
+            continue;
+        }
         if acr.len() == 2 {
             let pat = format!(r"\b{}\b", regex::escape(acr));
             if let Ok(re) = Regex::new(&pat)
@@ -92,7 +147,7 @@ pub fn has_acronym_leak(target: &str, hint: &str) -> bool {
 /// Pure Rust ASCII/Latin diacritic folding for NFD-like normalization without external dependencies.
 ///
 /// Strips combining marks (Unicode `Mn`) and maps accented Latin characters to their ASCII bases.
-fn fold_latin_char(c: char) -> Option<char> {
+pub(crate) fn fold_latin_char(c: char) -> Option<char> {
     match c {
         'a'..='z' | '0'..='9' | ' ' => Some(c),
         // Portuguese & Western European vowels with acute, grave, circumflex, tilde, umlaut/diaeresis, ring
@@ -476,5 +531,27 @@ mod tests {
         let s_no_hint = "A droga de escolha para intubação em sequência rápida na suspeita de hipertensão intracraniana é o {{c1::etomidato}} por sua estabilidade hemodinâmica.";
         let d_no_hint = check_hints(s_no_hint, None, None);
         assert_eq!(worst_severity(&d_no_hint), "PASS");
+    }
+
+    #[test]
+    fn test_clinical_unit_and_route_allowlist_in_hints() {
+        let allowed = [
+            ("10 UI", "dose em UI"),
+            ("40 mEq", "dose em mEq"),
+            ("1 g IV", "posologia IV"),
+            ("0,1 UI/kg/h EV", "taxa de infusão EV"),
+            ("500 mg VO", "esquema VO"),
+            ("40 mg SC", "dose SC"),
+            ("0,3 mg IM", "dose e via IM"),
+        ];
+        for (target, hint) in allowed {
+            assert!(
+                !has_acronym_leak(target, hint),
+                "unit/route hint should be allowed: target='{target}', hint='{hint}'"
+            );
+        }
+
+        assert!(has_acronym_leak("IM", "via IM"));
+        assert!(has_acronym_leak("IV", "via IV"));
     }
 }

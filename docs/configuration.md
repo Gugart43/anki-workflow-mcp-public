@@ -6,7 +6,7 @@ Este documento detalha a configuração do servidor nativo Rust e do orquestrado
 
 ## 1. Configuração do Servidor Nativo Rust (Primário)
 
-O servidor Rust `anki-workflow-mcp` opera puramente em memória e via transporte stdio. Ele não depende de arquivos de banco de dados ou diretórios locais de staging para executar suas 6 ferramentas.
+O servidor Rust `anki-workflow-mcp` opera via transporte stdio e expõe 7 ferramentas: 6 ferramentas determinísticas puramente em memória (`generation_contract_get`, `cards_compile_drafts`, `review_batch_information`, `quality_prepare`, `quality_evaluate` e `batch_patch_draft`), que não dependem de banco de dados nem de staging em disco, além de `export_reviewed_files` para persistência transacional local dos CSVs revisados e do ledger de estado (`.anki-workflow-export-state.json`) no diretório `exports/` do baralho.
 
 ### Invocação via Cliente MCP
 
@@ -31,7 +31,7 @@ Para eliminar colisões de executáveis no `PATH` entre os ecossistemas Rust e P
 
 | Servidor | Executável no `PATH` | Como iniciar no cliente MCP | Escopo |
 | :--- | :--- | :--- | :--- |
-| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 6 ferramentas determinísticas em memória (`quality_v1`). |
+| **Primário (Rust)** | `anki-workflow-mcp` | `"command": "anki-workflow-mcp", "args": ["serve"]` | 7 ferramentas: 6 determinísticas em memória (`quality_v1`) + `export_reviewed_files` (exportação CSV transacional local). |
 | **Legado (Python)** | `anki-workflow-mcp-legacy` | `"command": "anki-workflow-mcp-legacy"` | 49 ferramentas legadas, staging em disco e `export_final`. |
 
 O núcleo Rust requer MSRV mínimo 1.89 (exigido por dependências como `uuid 1.29.2`, `rmcp 3.10.0` e sintaxe let-chains). O toolchain padrão é fixado em `1.99.1` via `rust-toolchain.toml` (desvio de 1.99.0 alinhado ao canal estável disponível).
