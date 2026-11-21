@@ -1,0 +1,1122 @@
+/* ==========================================================================
+   AnkiMBR Presentation v2 — Light & Dark Theme Reference Stylesheet
+   - 100% simétrico (62 tokens Light == Dark == Auto)
+   - Zero @media (prefers-color-scheme: dark) solto (nunca sequestra Tema Claro)
+   - color-scheme: only light no modo claro (bloqueia Force Dark no AnkiDroid)
+   - Todos os pares validados matematicamente em WCAG 2.1 AA/AAA
+   - Preservação total de seletores nativos AnkiMBR e módulo ambr-zoom
+   ========================================================================== */
+
+:root,
+.card,
+[data-theme="light"] {
+  color-scheme: light;
+  color-scheme: only light;
+  --ambr-bg-canvas: #f1f5f9;
+  --ambr-surface: #ffffff;
+  --ambr-surface-elevated: #f8fafc;
+  --ambr-surface-subtle: #f1f5f9;
+  --ambr-ink: #0f172a;
+  --ambr-ink-secondary: #334155;
+  --ambr-ink-muted: #475569;
+  --ambr-accent: #1d4ed8;
+  --ambr-accent-soft: #eff6ff;
+  --ambr-rule: #cbd5e1;
+  --ambr-border-strong: #64748b;
+  --ambr-focus-ring: #2563eb;
+  --ambr-cloze-bg: #dbeafe;
+  --ambr-cloze-fg: #1e3a8a;
+  --ambr-code-bg: #f1f5f9;
+  --ambr-code-fg: #9f1239;
+  --ambr-mark-bg: #fef08a;
+  --ambr-mark-fg: #0f172a;
+  --anki-th-col-bg: #e8eff7;
+  --anki-th-row-bg: #f4f7fb;
+  --anki-zebra-bg: #f8fafc;
+  --anki-trap-fg: #78350f;
+  --anki-trap-bg: #fffbeb;
+  --anki-trap-bd: #b45309;
+  --anki-pearl-fg: #065f46;
+  --anki-pearl-bg: #ecfdf5;
+  --anki-pearl-bd: #047857;
+  --anki-diff-fg: #4c1d95;
+  --anki-diff-bg: #f5f3ff;
+  --anki-diff-bd: #6d28d9;
+  --anki-reason-fg: #1e3a8a;
+  --anki-reason-bg: #eff6ff;
+  --anki-reason-bd: #1d4ed8;
+  --anki-redflag-fg: #881337;
+  --anki-redflag-bg: #fff1f2;
+  --anki-redflag-bd: #be123c;
+  --anki-corr-fg: #115e59;
+  --anki-corr-bg: #f0fdfa;
+  --anki-corr-bd: #0f766e;
+  --anki-badge-bg: #1e3a8a;
+  --anki-badge-fg: #ffffff;
+  --anki-flow-pos-fg: #065f46;
+  --anki-flow-pos-bg: #dcfce7;
+  --anki-flow-pos-bd: #15803d;
+  --anki-flow-neg-fg: #334155;
+  --anki-flow-neg-bg: #e2e8f0;
+  --anki-flow-neg-bd: #475569;
+  --anki-flow-urg-fg: #881337;
+  --anki-flow-urg-bg: #ffe4e6;
+  --anki-flow-urg-bd: #be123c;
+  --anki-flow-dec-bg: #fef9c3;
+  --anki-flow-dec-fg: #713f12;
+  --anki-flow-dec-bd: #a16207;
+  --anki-figure-frame-bg: #ffffff;
+  --anki-figure-frame-fg: #334155;
+  --ambr-accent-line: #cfe1ff;
+  --ambr-ink-soft: #475569;
+  --ambr-control: #f8fafc;
+  --ambr-control-line: #cbd5e1;
+  --ambr-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --ambr-cloze: #dbeafe;
+  --ambr-cloze-ink: #1e3a8a;
+}
+
+html.nightMode,
+html.night_mode,
+body.nightMode,
+body.night_mode,
+.nightMode,
+.night_mode,
+.card.nightMode,
+.card.night_mode,
+.nightMode .card,
+.night_mode .card,
+[data-theme="dark"],
+[data-theme="dark"] .card {
+  color-scheme: dark;
+  --ambr-bg-canvas: #0b1120;
+  --ambr-surface: #111827;
+  --ambr-surface-elevated: #1e293b;
+  --ambr-surface-subtle: #172033;
+  --ambr-ink: #e8eef5;
+  --ambr-ink-secondary: #cbd5e1;
+  --ambr-ink-muted: #94a3b8;
+  --ambr-accent: #60a5fa;
+  --ambr-accent-soft: #172554;
+  --ambr-rule: #334155;
+  --ambr-border-strong: #64748b;
+  --ambr-focus-ring: #93c5fd;
+  --ambr-cloze-bg: #1e3a8a;
+  --ambr-cloze-fg: #eff6ff;
+  --ambr-code-bg: #1e293b;
+  --ambr-code-fg: #fda4af;
+  --ambr-mark-bg: #422006;
+  --ambr-mark-fg: #fef08a;
+  --anki-th-col-bg: #1e293b;
+  --anki-th-row-bg: #172033;
+  --anki-zebra-bg: #162032;
+  --anki-trap-fg: #fcd34d;
+  --anki-trap-bg: #2c1d07;
+  --anki-trap-bd: #f59e0b;
+  --anki-pearl-fg: #6ee7b7;
+  --anki-pearl-bg: #06281e;
+  --anki-pearl-bd: #10b981;
+  --anki-diff-fg: #c4b5fd;
+  --anki-diff-bg: #1e1636;
+  --anki-diff-bd: #a78bfa;
+  --anki-reason-fg: #93c5fd;
+  --anki-reason-bg: #0f223d;
+  --anki-reason-bd: #60a5fa;
+  --anki-redflag-fg: #fda4af;
+  --anki-redflag-bg: #2e1014;
+  --anki-redflag-bd: #fb7185;
+  --anki-corr-fg: #5eead4;
+  --anki-corr-bg: #082726;
+  --anki-corr-bd: #2dd4bf;
+  --anki-badge-bg: #60a5fa;
+  --anki-badge-fg: #0b1120;
+  --anki-flow-pos-fg: #6ee7b7;
+  --anki-flow-pos-bg: #063325;
+  --anki-flow-pos-bd: #34d399;
+  --anki-flow-neg-fg: #334155;
+  --anki-flow-neg-bg: #e2e8f0;
+  --anki-flow-neg-bd: #475569;
+  --anki-flow-urg-fg: #881337;
+  --anki-flow-urg-bg: #ffe4e6;
+  --anki-flow-urg-bd: #be123c;
+  --anki-flow-dec-bg: #fef9c3;
+  --anki-flow-dec-fg: #713f12;
+  --anki-flow-dec-bd: #a16207;
+  --anki-figure-frame-bg: #f1f5f9;
+  --anki-figure-frame-fg: #1e293b;
+  --ambr-accent-line: #2f4470;
+  --ambr-ink-soft: #94a3b8;
+  --ambr-control: #1e293b;
+  --ambr-control-line: #64748b;
+  --ambr-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --ambr-cloze: #1e3a8a;
+  --ambr-cloze-ink: #eff6ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="auto"],
+  [data-theme="auto"] .card {
+    color-scheme: dark;
+    --ambr-bg-canvas: #0b1120;
+    --ambr-surface: #111827;
+    --ambr-surface-elevated: #1e293b;
+    --ambr-surface-subtle: #172033;
+    --ambr-ink: #e8eef5;
+    --ambr-ink-secondary: #cbd5e1;
+    --ambr-ink-muted: #94a3b8;
+    --ambr-accent: #60a5fa;
+    --ambr-accent-soft: #172554;
+    --ambr-rule: #334155;
+    --ambr-border-strong: #64748b;
+    --ambr-focus-ring: #93c5fd;
+    --ambr-cloze-bg: #1e3a8a;
+    --ambr-cloze-fg: #eff6ff;
+    --ambr-code-bg: #1e293b;
+    --ambr-code-fg: #fda4af;
+    --ambr-mark-bg: #422006;
+    --ambr-mark-fg: #fef08a;
+    --anki-th-col-bg: #1e293b;
+    --anki-th-row-bg: #172033;
+    --anki-zebra-bg: #162032;
+    --anki-trap-fg: #fcd34d;
+    --anki-trap-bg: #2c1d07;
+    --anki-trap-bd: #f59e0b;
+    --anki-pearl-fg: #6ee7b7;
+    --anki-pearl-bg: #06281e;
+    --anki-pearl-bd: #10b981;
+    --anki-diff-fg: #c4b5fd;
+    --anki-diff-bg: #1e1636;
+    --anki-diff-bd: #a78bfa;
+    --anki-reason-fg: #93c5fd;
+    --anki-reason-bg: #0f223d;
+    --anki-reason-bd: #60a5fa;
+    --anki-redflag-fg: #fda4af;
+    --anki-redflag-bg: #2e1014;
+    --anki-redflag-bd: #fb7185;
+    --anki-corr-fg: #5eead4;
+    --anki-corr-bg: #082726;
+    --anki-corr-bd: #2dd4bf;
+    --anki-badge-bg: #60a5fa;
+    --anki-badge-fg: #0b1120;
+    --anki-flow-pos-fg: #6ee7b7;
+    --anki-flow-pos-bg: #063325;
+    --anki-flow-pos-bd: #34d399;
+    --anki-flow-neg-fg: #334155;
+    --anki-flow-neg-bg: #e2e8f0;
+    --anki-flow-neg-bd: #475569;
+    --anki-flow-urg-fg: #881337;
+    --anki-flow-urg-bg: #ffe4e6;
+    --anki-flow-urg-bd: #be123c;
+    --anki-flow-dec-bg: #fef9c3;
+    --anki-flow-dec-fg: #713f12;
+    --anki-flow-dec-bd: #a16207;
+    --anki-figure-frame-bg: #f1f5f9;
+    --anki-figure-frame-fg: #1e293b;
+    --ambr-accent-line: #2f4470;
+    --ambr-ink-soft: #94a3b8;
+    --ambr-control: #1e293b;
+    --ambr-control-line: #64748b;
+    --ambr-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+    --ambr-cloze: #1e3a8a;
+    --ambr-cloze-ink: #eff6ff;
+  }
+}
+
+/* --- Cross-Client Reset Seguro --- */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+.card {
+  box-sizing: border-box;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  background-color: var(--ambr-bg-canvas);
+  color: var(--ambr-ink);
+  text-align: center;
+  padding: 16px 12px;
+  overflow-wrap: break-word;
+}
+
+.card *,
+.card *::before,
+.card *::after {
+  box-sizing: border-box;
+}
+
+/* --- Contêineres e Estrutura Principal --- */
+
+/* Coluna central nativa: todas as caixas com a mesma largura máxima */
+.card .coluna,
+.coluna {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Superfície v2 de Recuperação Ativa (Limpa e Pragmática) */
+.ambr-card {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+  background-color: var(--ambr-surface);
+  color: var(--ambr-ink);
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.3rem 1.45rem;
+  border-radius: 12px;
+  border: 1px solid var(--ambr-rule);
+  line-height: 1.58;
+  text-align: left;
+}
+
+/* --- Cabeçalho e Campo de Estudo --- */
+.cabecalho {
+  margin-bottom: 10px;
+}
+
+.tag-estudo {
+  display: inline-block;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--ambr-accent);
+  background: var(--ambr-accent-soft);
+  border: 1px solid var(--ambr-accent-line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  overflow-wrap: anywhere;
+}
+
+.ambr-field-study {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ambr-ink-muted);
+  margin-bottom: 0.7rem;
+}
+
+/* --- Pergunta, Enunciado, Resposta e Sentença --- */
+.enunciado {
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--ambr-ink);
+  margin-top: 8px;
+  margin-bottom: 12px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.ambr-question,
+.ambr-cloze {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: var(--ambr-ink);
+  line-height: 1.55;
+}
+
+.resposta {
+  font-size: 19px;
+  font-weight: 500;
+  color: var(--ambr-ink);
+  background: var(--ambr-surface);
+  border-radius: 8px;
+  box-shadow: var(--ambr-shadow);
+  padding: 14px 16px;
+  margin-top: 8px;
+  margin-bottom: 16px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.ambr-answer {
+  font-size: 1.08rem;
+  font-weight: 600;
+  color: var(--ambr-ink);
+  margin-top: 0.75rem;
+}
+
+.sentenca-box {
+  background: var(--ambr-surface);
+  border-radius: 8px;
+  box-shadow: var(--ambr-shadow);
+  padding: 14px 16px;
+  margin-top: 6px;
+  margin-bottom: 14px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.sentenca {
+  font-size: 21px;
+  font-weight: 500;
+  color: var(--ambr-ink);
+}
+
+/* Separadores */
+hr#answer,
+.ambr-divider {
+  border: 0;
+  border-top: 1px solid var(--ambr-rule);
+  margin: 0.95rem 0;
+}
+
+.card hr {
+  border: none;
+  border-top: 1px solid var(--ambr-rule);
+  width: 60%;
+  margin: 12px auto;
+}
+
+/* Cloze Deletions (compatível com nativo e v2) */
+.cloze {
+  font-weight: 700;
+  color: var(--ambr-cloze-fg);
+  background-color: var(--ambr-cloze-bg);
+  padding: 0.08rem 0.38rem;
+  border-radius: 5px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* Marca d'água nativa AnkiMBR */
+.marca-dagua {
+  margin-top: 16px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  color: var(--ambr-ink-soft);
+  opacity: .6;
+  user-select: none;
+  text-align: center;
+}
+
+/* Código e Marcação v2 */
+.ambr-card code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background-color: var(--ambr-code-bg);
+  color: var(--ambr-code-fg);
+  border: 1px solid var(--ambr-rule);
+  padding: 0.06rem 0.32rem;
+  border-radius: 4px;
+}
+
+.ambr-card mark {
+  background-color: var(--ambr-mark-bg);
+  color: var(--ambr-mark-fg);
+  padding: 0.05rem 0.28rem;
+  border-radius: 4px;
+}
+
+/* --- Caixas Expansíveis (Hints Nativos e v2) --- */
+
+/* Contêiner de Hints Nativo (.hints-container, .hint, .hint-corpo, .hint-ref) */
+.hints-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.hints-container > * {
+  min-width: 0;
+}
+
+.hint {
+  width: 100%;
+}
+
+.hint > summary {
+  display: inline-block;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ambr-ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.hint > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint > summary::after {
+  content: " \25BE";
+  opacity: .7;
+}
+
+.hint[open] > summary {
+  color: var(--ambr-accent);
+}
+
+.hint[open] > summary::after {
+  content: " \25B4";
+}
+
+.hint > summary:focus-visible {
+  outline: 1px solid var(--ambr-accent);
+  outline-offset: 2px;
+}
+
+.hint-corpo {
+  margin-top: 6px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: var(--ambr-surface);
+  box-shadow: var(--ambr-shadow);
+  color: var(--ambr-ink);
+  font-size: 16px;
+  text-align: left;
+}
+
+.hint-corpo.centro {
+  text-align: center;
+}
+
+/* Referências Nativas: alinhadas à direita */
+.hint-ref {
+  text-align: right;
+}
+
+.hint-ref .hint-corpo {
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 2px;
+  margin-top: 4px;
+  border-radius: 0;
+  color: var(--ambr-ink-soft);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+/* Caixas Expansíveis v2 (.hint-details) */
+.hint-details {
+  margin-top: 1rem;
+  border: 1px solid var(--ambr-rule);
+  border-radius: 10px;
+  background-color: var(--ambr-surface-subtle);
+  padding: 0.65rem 0.95rem;
+}
+
+.hint-details > summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--ambr-ink-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.hint-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hint-details > summary::before {
+  content: "▸";
+  font-size: 0.85em;
+  color: var(--ambr-accent);
+  transition: transform 0.15s ease;
+}
+
+.hint-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.hint-details > summary:focus-visible {
+  outline: 2px solid var(--ambr-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.anki-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-top: 0.7rem;
+  font-size: 0.94rem;
+  color: var(--ambr-ink);
+}
+
+.anki-tldr {
+  padding: 0.68rem 0.9rem;
+  border-radius: 8px;
+  background-color: var(--ambr-accent-soft);
+  border: 1px solid var(--ambr-rule);
+  border-left: 4px solid var(--ambr-accent);
+  color: var(--ambr-ink);
+}
+
+/* Correlação Clínica v2 */
+.anki-clinical-corr {
+  border: 1px solid var(--anki-corr-bd);
+  border-left: 4px solid var(--anki-corr-bd);
+  background-color: var(--anki-corr-bg);
+  border-radius: 8px;
+  padding: 0.8rem 0.95rem;
+}
+
+.anki-clinical-corr__title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--anki-corr-fg);
+  margin-bottom: 0.5rem;
+}
+
+.anki-clinical-corr__grid {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.anki-clinical-corr__item dt {
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--anki-corr-fg);
+}
+
+.anki-clinical-corr__item dd {
+  margin: 0.12rem 0 0 0;
+  color: var(--ambr-ink);
+}
+
+/* Callouts v2 */
+.anki-callout {
+  margin: 0;
+  padding: 0.68rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--ambr-rule);
+  border-left: 4px solid var(--ambr-accent);
+  background-color: var(--ambr-surface);
+  color: var(--ambr-ink);
+}
+
+.anki-callout p {
+  margin: 0;
+  color: var(--ambr-ink);
+}
+
+.anki-callout--trap { background-color: var(--anki-trap-bg); border-color: var(--anki-trap-bd); border-left-width: 4px; }
+.anki-callout--trap b { color: var(--anki-trap-fg); }
+.anki-callout--pearl { background-color: var(--anki-pearl-bg); border-color: var(--anki-pearl-bd); border-left-width: 4px; }
+.anki-callout--pearl b { color: var(--anki-pearl-fg); }
+.anki-callout--diff { background-color: var(--anki-diff-bg); border-color: var(--anki-diff-bd); border-left-width: 4px; }
+.anki-callout--diff b { color: var(--anki-diff-fg); }
+.anki-callout--reasoning { background-color: var(--anki-reason-bg); border-color: var(--anki-reason-bd); border-left-width: 4px; }
+.anki-callout--reasoning b { color: var(--anki-reason-fg); }
+.anki-callout--redflag { background-color: var(--anki-redflag-bg); border-color: var(--anki-redflag-bd); border-left-width: 4px; }
+.anki-callout--redflag b { color: var(--anki-redflag-fg); }
+
+/* --- Listas e Tabelas (Nativas e v2) --- */
+
+/* Lista de Notas formatada a partir de bullets (Script P2 Nativo) */
+.hint-corpo ul.ambr-notas,
+ul.ambr-notas {
+  list-style-type: disc;
+  margin: 4px 0;
+  padding-left: 1.4em;
+  text-align: left;
+}
+
+.ambr-notas li {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+
+.ambr-notas li::marker {
+  color: var(--ambr-accent);
+  font-size: .85em;
+}
+
+.card ul,
+.card ol {
+  text-align: left;
+  margin: 6px auto;
+  padding-left: 1.4em;
+}
+
+.card li {
+  margin: 3px 0;
+}
+
+/* Tabelas Nativas sem wrapper */
+.card table:not(.anki-table) {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  margin: 8px auto;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.card table:not(.anki-table) th,
+.card table:not(.anki-table) td {
+  border: 1px solid var(--ambr-rule);
+  padding: 4px 8px;
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: break-word;
+  background: var(--ambr-surface);
+  color: var(--ambr-ink);
+}
+
+.card table:not(.anki-table) th {
+  background: var(--ambr-accent-soft);
+  color: var(--ambr-accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.nightMode .card table:not(.anki-table) th,
+.card.nightMode table:not(.anki-table) th,
+.night_mode .card table:not(.anki-table) th,
+.card.night_mode table:not(.anki-table) th,
+[data-theme="dark"] .card table:not(.anki-table) th {
+  color: #e2e8f0;
+}
+
+/* Tabelas Estruturadas Responsivas Claro/Escuro v2 */
+.anki-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--ambr-rule);
+  border-radius: 8px;
+  background-color: var(--ambr-surface);
+}
+
+.anki-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  color: var(--ambr-ink);
+  background-color: var(--ambr-surface);
+}
+
+.anki-table caption {
+  text-align: left;
+  font-weight: 700;
+  font-size: 0.84rem;
+  padding: 0.55rem 0.75rem;
+  color: var(--ambr-ink-secondary);
+  background-color: var(--ambr-surface-elevated);
+  border-bottom: 1px solid var(--ambr-rule);
+}
+
+.anki-table th,
+.anki-table td {
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--ambr-rule);
+  vertical-align: top;
+  color: var(--ambr-ink);
+}
+
+.anki-table--compact th,
+.anki-table--compact td {
+  padding: 0.38rem 0.58rem;
+  font-size: 0.84rem;
+}
+
+.anki-table__head th {
+  background-color: var(--anki-th-col-bg);
+  font-weight: 700;
+  color: var(--ambr-ink);
+}
+
+.anki-table tbody th[scope="row"] {
+  background-color: var(--anki-th-row-bg);
+  font-weight: 600;
+  color: var(--ambr-ink);
+}
+
+.anki-table tbody tr:nth-child(even) td {
+  background-color: var(--anki-zebra-bg);
+}
+
+.anki-col--left { text-align: left; }
+.anki-col--center { text-align: center; }
+.anki-col--right { text-align: right; }
+
+/* --- Fluxogramas HTML5 + CSS Puro v2 --- */
+.anki-flow {
+  font-size: 0.88rem;
+  line-height: 1.42;
+  color: var(--ambr-ink);
+}
+
+.anki-flow-chain,
+.anki-flow-branches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.anki-flow-branches {
+  margin: 0.4rem 0 0 0.75rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--ambr-border-strong);
+}
+
+.anki-flow-branch {
+  position: relative;
+  margin: 0.48rem 0;
+}
+
+.anki-flow-branch::before {
+  content: "";
+  position: absolute;
+  left: -0.8rem;
+  top: 0.72rem;
+  width: 0.68rem;
+  border-top: 2px solid var(--ambr-border-strong);
+}
+
+.anki-flow-node {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.52rem 0.75rem;
+  border-radius: 8px;
+  border: 1.5px solid var(--ambr-rule);
+  background-color: var(--ambr-surface);
+  color: var(--ambr-ink);
+}
+
+.anki-flow-node--start { border-color: var(--ambr-accent); background-color: var(--ambr-accent-soft); font-weight: 600; }
+.anki-flow-node--decision { border-color: var(--anki-flow-dec-bd); background-color: var(--anki-flow-dec-bg); color: var(--anki-flow-dec-fg); font-weight: 600; }
+.anki-flow-node--action { border-left: 4px solid var(--ambr-accent); }
+.anki-flow-node--alert { border-color: var(--anki-flow-urg-bd); background-color: var(--anki-flow-urg-bg); color: var(--anki-flow-urg-fg); font-weight: 600; }
+.anki-flow-node--outcome { border-color: var(--anki-flow-pos-bd); background-color: var(--anki-flow-pos-bg); color: var(--anki-flow-pos-fg); font-weight: 600; }
+
+.anki-flow-badge {
+  flex: 0 0 auto;
+  min-width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 999px;
+  background-color: var(--anki-badge-bg);
+  color: var(--anki-badge-fg);
+  font-size: 0.74rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.anki-flow-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.25rem 0;
+  color: var(--ambr-ink-muted);
+}
+
+.anki-flow-edge {
+  display: inline-block;
+  margin-bottom: 0.3rem;
+  padding: 0.12rem 0.52rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  border: 1px solid var(--ambr-rule);
+  background-color: var(--ambr-surface);
+  color: var(--ambr-ink);
+}
+
+.anki-flow-edge--positive { background-color: var(--anki-flow-pos-bg); color: var(--anki-flow-pos-fg); border-color: var(--anki-flow-pos-bd); }
+.anki-flow-edge--negative { background-color: var(--anki-flow-neg-bg); color: var(--anki-flow-neg-fg); border-color: var(--anki-flow-neg-bd); }
+.anki-flow-edge--urgent { background-color: var(--anki-flow-urg-bg); color: var(--anki-flow-urg-fg); border-color: var(--anki-flow-urg-bd); }
+
+.anki-flow-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.62rem;
+  border-radius: 6px;
+  border: 1.5px dashed var(--ambr-accent);
+  background-color: var(--ambr-accent-soft);
+  color: var(--ambr-accent);
+  font-weight: 700;
+  font-size: 0.82rem;
+}
+
+/* --- Mídia e Figuras Clínicas Tema-Seguras --- */
+.card img,
+.card video {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+.media figure,
+.anki-figure {
+  margin: 0.5rem auto;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--ambr-rule);
+  background-color: var(--ambr-surface);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.media img,
+.media video,
+.anki-figure img,
+.anki-figure video {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 0 auto;
+}
+
+.media figcaption,
+.anki-figcaption {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--ambr-ink-muted);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.anki-figure--frame-light,
+.media figure.anki-figure--frame-light {
+  background-color: var(--anki-figure-frame-bg);
+}
+
+.anki-figure--frame-light .anki-figcaption,
+.media figure.anki-figure--frame-light figcaption,
+.anki-figure--frame-light figcaption {
+  color: var(--anki-figure-frame-fg);
+}
+
+.nightMode .anki-figure--preserve img,
+.night_mode .anki-figure--preserve img,
+[data-theme="dark"] .anki-figure--preserve img,
+.nightMode .media figure.anki-figure--preserve img,
+.night_mode .media figure.anki-figure--preserve img,
+[data-theme="dark"] .media figure.anki-figure--preserve img {
+  filter: none;
+}
+
+.nightMode .anki-figure--invert-dark img,
+.night_mode .anki-figure--invert-dark img,
+[data-theme="dark"] .anki-figure--invert-dark img,
+.nightMode .media figure.anki-figure--invert-dark img,
+.night_mode .media figure.anki-figure--invert-dark img,
+[data-theme="dark"] .media figure.anki-figure--invert-dark img {
+  filter: invert(0.92) hue-rotate(180deg);
+}
+
+.anki-sources {
+  font-size: 0.8rem;
+  color: var(--ambr-ink-muted);
+  border-top: 1px solid var(--ambr-rule);
+  padding-top: 0.5rem;
+}
+
+/* Equações Matemáticas: KaTeX / MathJax */
+.card .katex-display,
+.card mjx-container[display="true"] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+/* --- Adaptações Responsivas Mobile --- */
+@media (max-width: 600px) {
+  .ambr-card {
+    padding: 0.95rem 1.05rem;
+    border-radius: 8px;
+  }
+  .ambr-question,
+  .ambr-cloze {
+    font-size: 1.02rem;
+  }
+  .anki-flow-branches {
+    margin-left: 0.45rem;
+    padding-left: 0.55rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .card {
+    font-size: 16px;
+    padding: 12px 10px;
+  }
+  .enunciado,
+  .sentenca {
+    font-size: 19px;
+  }
+  .resposta {
+    font-size: 18px;
+  }
+  .card table:not(.anki-table) th,
+  .card table:not(.anki-table) td {
+    padding: 3px 4px;
+    font-size: 13px;
+  }
+}
+
+/* ==========================================================================
+   ambr-zoom: Componente de visualização e ampliação de imagem em tela cheia
+   (Visualização interativa com overlay em tela cheia)
+   ========================================================================== */
+
+.ambr-zoom-overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 999999;
+  background-color: rgba(12, 12, 14, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  overscroll-behavior: contain;
+}
+
+.ambr-zoom-overlay.ambr-zoom-open {
+  display: flex;
+}
+
+.ambr-zoom-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+.ambr-zoom-overlay .ambr-zoom-image {
+  max-width: 100vw;
+  max-height: 100vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  display: block;
+  cursor: grab;
+  transform-origin: center center;
+  will-change: transform;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.ambr-zoom-overlay .ambr-zoom-image.ambr-zoom-dragging {
+  cursor: grabbing;
+}
+
+.ambr-zoom-overlay .ambr-zoom-image.ambr-zoom-animating {
+  transition: transform 0.22s cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.ambr-zoom-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  width: 48px;
+  height: 48px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background-color: rgba(32, 32, 32, 0.78);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1000000;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+  touch-action: manipulation;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+}
+
+.ambr-zoom-close:hover,
+.ambr-zoom-close:focus-visible {
+  background-color: rgba(60, 60, 60, 0.95);
+  border-color: rgba(255, 255, 255, 0.65);
+  transform: scale(1.05);
+}
+
+.ambr-zoom-close:active {
+  transform: scale(0.95);
+  background-color: rgba(20, 20, 20, 0.95);
+}
+
+.ambr-zoom-icon {
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+  stroke: #ffffff;
+  fill: none;
+  display: block;
+}
+
+/* ==========================================================================
+   Modo de Impressão (@media print)
+   ========================================================================== */
+@media print {
+  :root,
+  .card,
+  .nightMode,
+  .night_mode,
+  [data-theme="dark"] {
+    color-scheme: light !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}

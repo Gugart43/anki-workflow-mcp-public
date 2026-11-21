@@ -1,5 +1,6 @@
 //! Deterministic validation and sanitization engine for `anki-workflow-mcp`.
 
+pub mod auto_repair;
 pub mod batch_information;
 pub mod cloze;
 pub mod cloze_renumber;
@@ -9,12 +10,14 @@ pub mod domain_profile;
 pub mod draft_compile;
 pub mod draft_normalize;
 pub mod draft_patch;
+pub mod evidence_matcher;
 pub mod hints;
 mod html_security;
 pub mod html_text;
 pub mod id_leak;
 pub mod image_alias;
 pub mod images;
+pub mod interference;
 pub mod legacy_adapter;
 pub mod media_figure;
 pub mod note_flow;
@@ -24,6 +27,7 @@ pub mod note_render;
 pub mod notes;
 pub mod notes_render;
 pub mod qa;
+pub mod qa_clinical;
 pub mod quality;
 pub mod quality_content;
 pub mod sanitize;

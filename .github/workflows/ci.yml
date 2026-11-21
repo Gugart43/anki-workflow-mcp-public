@@ -136,6 +136,9 @@ jobs:
       - name: Unit & integration tests (non-differential)
         run: uv run --frozen pytest --ignore=tests/differential
 
+      - name: Theme regression checks (AnkiMBR CSS v2 bridge)
+        run: uv run --frozen python tests/theme_regression_checks.py
+
   parity:
     name: Parity (ubuntu-latest)
     needs: [rust]

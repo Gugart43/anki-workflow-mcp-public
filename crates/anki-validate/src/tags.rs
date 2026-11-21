@@ -20,6 +20,26 @@ fn depth(tag: &str) -> usize {
     tag.matches(SEPARATOR).count() + 1
 }
 
+/// Normaliza texto PT-BR para minúsculas sem acentos.
+///
+/// Compartilhado por `qa_clinical` e `interference` (heurísticas Wave 2). Mantém
+/// apenas os diacríticos do português para não alterar radicais clínicos.
+#[must_use]
+pub fn normalize_ptbr(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'ã' | 'â' => 'a',
+            'é' | 'ê' => 'e',
+            'í' => 'i',
+            'ó' | 'ô' | 'õ' => 'o',
+            'ú' | 'ü' => 'u',
+            'ç' => 'c',
+            _ => c,
+        })
+        .collect()
+}
+
 fn attach_location(mut diag: Diagnostic, row: Option<usize>, field: &str) -> Diagnostic {
     if let Some(r) = row {
         if let Some(row_num) = CsvRowNumber::new(r) {

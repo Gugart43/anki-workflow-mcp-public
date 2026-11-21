@@ -5,6 +5,7 @@ members = [
     "crates/anki-parser",
     "crates/anki-validate",
     "apps/anki-workflow-mcp",
+    "tools/anki-theme-audit-mcp",
 ]
 
 [workspace.package]
