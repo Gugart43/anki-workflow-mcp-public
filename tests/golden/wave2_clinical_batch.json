@@ -1,0 +1,79 @@
+{
+  "batch_id": "wave2_clinical_batch_01",
+  "profile": "med_br",
+  "sources": [
+    {
+      "source_id": "SRC-ADA-2024",
+      "title": "ADA Consensus Report on Hyperglycemic Crises in Adults (2024)",
+      "content": "In diabetic ketoacidosis, if serum potassium is <3.3 mmol/L, hold insulin and give potassium replacement at 20-30 mEq/L until K+ >= 3.3 mEq/L to prevent life-threatening arrhythmias."
+    }
+  ],
+  "obligations": [
+    {
+      "id": "OB-CAD-01",
+      "summary": "Conduta inicial na CAD com K+ < 3,3 mEq/L"
+    },
+    {
+      "id": "OB-CAD-02",
+      "summary": "Tríade diagnóstica laboratorial da CAD"
+    },
+    {
+      "id": "OB-IAM-01",
+      "summary": "Confirmação eletrocardiográfica de IAM de VD"
+    }
+  ],
+  "cards": [
+    {
+      "id": "B02-QA-001",
+      "card_type": "qa",
+      "enunciado": "Na cetoacidose diabética (CAD) em adulto com K<sup>+</sup> sérico &lt; 3,3 mEq/L (ADA 2024), qual a conduta prioritária antes da insulinoterapia?",
+      "resposta": "Suspender/adiar insulina regular EV e repor KCl 20–30 mEq/L EV até K<sup>+</sup> &ge; 3,3 mEq/L.",
+      "campo_estudo": "Endocrinologia > Emergências Glicêmicas",
+      "referencias": "ADA Consensus Report on Hyperglycemic Crises (2024), Sec. Potassium.",
+      "etiquetas": "medicina::endocrinologia emergencia::cad id::B02-QA-001"
+    },
+    {
+      "id": "B02-CL-001",
+      "card_type": "cloze",
+      "sentenca": "A tríade diagnóstica clássica da cetoacidose diabética inclui hiperglicemia (&gt; 200 mg/dL), {{c1::cetonemia/cetonúria::achado metabólico}} e {{c2::acidose metabólica com ânion gap elevado::distúrbio ácido-base}}.",
+      "campo_estudo": "Endocrinologia > Emergências Glicêmicas",
+      "referencias": "ADA Consensus Report on Hyperglycemic Crises (2024), Table 1.",
+      "etiquetas": "medicina::endocrinologia emergencia::cad id::B02-CL-001"
+    },
+    {
+      "id": "B02-QA-002",
+      "card_type": "qa",
+      "enunciado": "Qual derivação precordial direita confirma acometimento de ventrículo direito no IAM inferior?",
+      "resposta": "Supra de ST &ge; 1 mm em <b>V4R</b>.",
+      "campo_estudo": "Cardiologia > SCA",
+      "media": {
+        "filename": "sbc_iam_vd_v4r.webp",
+        "alt": "ECG com supradesnivelamento de ST em V4R sugerindo IAM de ventrículo direito",
+        "caption": "Supra em V4R orienta evitar nitratos e considerar expansão volêmica cautelosa.",
+        "theme_behavior": "preserve"
+      },
+      "referencias": "V Diretriz SBC IAMCSST (2024), Seção 4.2.",
+      "etiquetas": "medicina::cardiologia sca::iam_vd id::B02-QA-002"
+    }
+  ],
+  "bindings": [
+    {
+      "unit_id": "B02-QA-001",
+      "obligation_ids": [
+        "OB-CAD-01"
+      ]
+    },
+    {
+      "unit_id": "B02-CL-001",
+      "obligation_ids": [
+        "OB-CAD-02"
+      ]
+    },
+    {
+      "unit_id": "B02-QA-002",
+      "obligation_ids": [
+        "OB-IAM-01"
+      ]
+    }
+  ]
+}

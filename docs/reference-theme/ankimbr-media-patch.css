@@ -1,0 +1,202 @@
+/* ==========================================================================
+   AnkiMBR — Patch de Mídia Responsiva e Figuras Clínicas Tema-Seguras
+   Arquivo de Referência: docs/reference-theme/ankimbr-media-patch.css
+   Suporte: Wave 2 Clinical Creation Pipeline + Retrocompatibilidade Nativa AnkiMBR
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Contêiner de Figura Clínica (.anki-figure e legado .media figure)
+   -------------------------------------------------------------------------- */
+.anki-figure,
+.media figure {
+  margin: 0.6rem 0;
+  padding: 0.45rem;
+  border-radius: 8px;
+  border: 1px solid var(--ambr-rule, #e2e8f0);
+  background: var(--ambr-surface, #ffffff);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------------------------
+   2. Elemento de Imagem Clínica Responsiva
+   -------------------------------------------------------------------------- */
+.anki-figure img,
+.media figure img,
+.media img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  display: block;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* --------------------------------------------------------------------------
+   3. Legenda Clínica (.anki-figcaption e legado .media figcaption)
+   -------------------------------------------------------------------------- */
+.anki-figcaption,
+.anki-figure figcaption,
+.media figure figcaption,
+.media figcaption {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--ambr-ink-muted, var(--ambr-ink-soft, #475569));
+  text-align: left;
+}
+
+.anki-figcaption small,
+.anki-figure figcaption small,
+.media figure figcaption small,
+.media figcaption small {
+  font-size: 0.75rem;
+  color: var(--ambr-ink-muted, var(--ambr-ink-soft, #64748b));
+}
+
+/* --------------------------------------------------------------------------
+   4. Suporte Base a Dark Mode (quando não usa modificadores especiais)
+   -------------------------------------------------------------------------- */
+.nightMode .anki-figure:not(.anki-figure--frame-light),
+.night_mode .anki-figure:not(.anki-figure--frame-light),
+[data-theme="dark"] .anki-figure:not(.anki-figure--frame-light),
+.nightMode .media figure:not(.anki-figure--frame-light),
+.night_mode .media figure:not(.anki-figure--frame-light),
+[data-theme="dark"] .media figure:not(.anki-figure--frame-light) {
+  background: var(--ambr-surface, #1e293b);
+  border-color: var(--ambr-rule, #334155);
+}
+
+.nightMode .anki-figcaption:not(.anki-figure--frame-light *),
+.nightMode .anki-figure:not(.anki-figure--frame-light) figcaption,
+.night_mode .anki-figcaption:not(.anki-figure--frame-light *),
+.night_mode .anki-figure:not(.anki-figure--frame-light) figcaption,
+[data-theme="dark"] .anki-figcaption:not(.anki-figure--frame-light *),
+[data-theme="dark"] .anki-figure:not(.anki-figure--frame-light) figcaption,
+.nightMode .media figcaption:not(.anki-figure--frame-light *),
+.night_mode .media figcaption:not(.anki-figure--frame-light *),
+[data-theme="dark"] .media figcaption:not(.anki-figure--frame-light *) {
+  color: var(--ambr-ink-muted, var(--ambr-ink-soft, #94a3b8));
+}
+
+/* --------------------------------------------------------------------------
+   5. Comportamentos Clínicos Tema-Seguros (MediaThemeBehavior)
+   Compatibilidade: .nightMode, .night_mode e [data-theme="dark"]
+   -------------------------------------------------------------------------- */
+
+/* Preserve: exames/fotos/ECGs/lâminas coloridas nunca invertem no Dark Mode */
+.nightMode .anki-figure--preserve img,
+.night_mode .anki-figure--preserve img,
+[data-theme="dark"] .anki-figure--preserve img,
+.nightMode .media figure.anki-figure--preserve img,
+.night_mode .media figure.anki-figure--preserve img,
+[data-theme="dark"] .media figure.anki-figure--preserve img,
+.nightMode .media.anki-figure--preserve img,
+.night_mode .media.anki-figure--preserve img,
+[data-theme="dark"] .media.anki-figure--preserve img {
+  filter: none;
+}
+
+/* FrameLight: moldura clara suave para gráficos/diagramas com fundo branco no Dark Mode */
+.nightMode .anki-figure--frame-light,
+.night_mode .anki-figure--frame-light,
+[data-theme="dark"] .anki-figure--frame-light,
+.nightMode .media figure.anki-figure--frame-light,
+.night_mode .media figure.anki-figure--frame-light,
+[data-theme="dark"] .media figure.anki-figure--frame-light,
+.nightMode .media.anki-figure--frame-light,
+.night_mode .media.anki-figure--frame-light,
+[data-theme="dark"] .media.anki-figure--frame-light {
+  background: #f1f5f9;
+  border-color: var(--ambr-rule, #cbd5e1);
+}
+
+.nightMode .anki-figure--frame-light .anki-figcaption,
+.nightMode .anki-figure--frame-light figcaption,
+.night_mode .anki-figure--frame-light .anki-figcaption,
+.night_mode .anki-figure--frame-light figcaption,
+[data-theme="dark"] .anki-figure--frame-light .anki-figcaption,
+[data-theme="dark"] .anki-figure--frame-light figcaption,
+.nightMode .media figure.anki-figure--frame-light figcaption,
+.night_mode .media figure.anki-figure--frame-light figcaption,
+[data-theme="dark"] .media figure.anki-figure--frame-light figcaption {
+  color: #334155;
+}
+
+/* InvertDark: apenas diagramas esquemáticos monocromáticos em linha preta */
+.nightMode .anki-figure--invert-dark img,
+.night_mode .anki-figure--invert-dark img,
+[data-theme="dark"] .anki-figure--invert-dark img,
+.nightMode .media figure.anki-figure--invert-dark img,
+.night_mode .media figure.anki-figure--invert-dark img,
+[data-theme="dark"] .media figure.anki-figure--invert-dark img,
+.nightMode .media.anki-figure--invert-dark img,
+.night_mode .media.anki-figure--invert-dark img,
+[data-theme="dark"] .media.anki-figure--invert-dark img {
+  filter: invert(0.92) hue-rotate(180deg);
+}
+
+/* --------------------------------------------------------------------------
+   6. Suporte a prefers-color-scheme Estritamente Opt-In
+   Evita interferência do tema do SO quando o Anki está em Light Mode
+   -------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] .anki-figure--preserve img,
+  :root[data-theme="system"] .anki-figure--preserve img,
+  body[data-theme="auto"] .anki-figure--preserve img,
+  body[data-theme="system"] .anki-figure--preserve img {
+    filter: none;
+  }
+
+  :root[data-theme="auto"] .anki-figure--frame-light,
+  :root[data-theme="system"] .anki-figure--frame-light,
+  body[data-theme="auto"] .anki-figure--frame-light,
+  body[data-theme="system"] .anki-figure--frame-light {
+    background: #f1f5f9;
+    border-color: var(--ambr-rule, #cbd5e1);
+  }
+
+  :root[data-theme="auto"] .anki-figure--frame-light .anki-figcaption,
+  :root[data-theme="auto"] .anki-figure--frame-light figcaption,
+  :root[data-theme="system"] .anki-figure--frame-light .anki-figcaption,
+  :root[data-theme="system"] .anki-figure--frame-light figcaption,
+  body[data-theme="auto"] .anki-figure--frame-light .anki-figcaption,
+  body[data-theme="system"] .anki-figure--frame-light .anki-figcaption {
+    color: #334155;
+  }
+
+  :root[data-theme="auto"] .anki-figure--invert-dark img,
+  :root[data-theme="system"] .anki-figure--invert-dark img,
+  body[data-theme="auto"] .anki-figure--invert-dark img,
+  body[data-theme="system"] .anki-figure--invert-dark img {
+    filter: invert(0.92) hue-rotate(180deg);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   7. Estilos de Impressão (Override exclusivo para impressão/PDF)
+   -------------------------------------------------------------------------- */
+@media print {
+  .anki-figure,
+  .media figure {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border-color: #cbd5e1 !important;
+    background: #ffffff !important;
+    box-shadow: none !important;
+  }
+
+  .anki-figure img,
+  .media figure img,
+  .media img {
+    filter: none !important;
+    max-width: 100% !important;
+  }
+
+  .anki-figcaption,
+  .anki-figure figcaption,
+  .media figure figcaption,
+  .media figcaption {
+    color: #334155 !important;
+  }
+}
