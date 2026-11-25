@@ -1,5 +1,9 @@
 """tests/test_sanitize.py — Comprehensive tests for core/sanitize.py."""
 
+import time
+
+import pytest
+
 from anki_mcp.checks.csv_structure import check_csv
 from anki_mcp.core.sanitize import auto_fix_csv_block, sanitize_field
 
@@ -78,3 +82,42 @@ def test_auto_fix_csv_block_cloze():
     criticals = [d for d in diags if d.severity.value == "CRITICAL"]
     assert not criticals, f"Found critical diagnostics: {criticals}"
     assert "{{c1::idade &gt; 60 anos}}" in fixed_csv
+
+
+# ── B15: linear scanner + input cap (DoS hardening) ──────────────────────────
+
+
+def test_sanitizer_is_linear_on_adversarial_unclosed_tags():
+    """`<a ` x8000 used to backtrack for ~10.8 s (O(n²)); the scanner must be linear."""
+    payload = "<a " * 8000
+    start = time.perf_counter()
+    clean, _fixes = sanitize_field(payload)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+    assert elapsed_ms < 200.0, f"sanitize_field took {elapsed_ms:.1f} ms on 8k unclosed tags"
+    # Still correct: bare '<' and '>' become entities.
+    assert "&lt;a" in clean
+    assert "<a" not in clean
+
+
+def test_sanitizer_is_linear_on_adversarial_unterminated_tag_names():
+    for payload in ("<ax" * 8000 + ">", "<!--x" * 8000, "<a " * 8000 + ">"):
+        start = time.perf_counter()
+        sanitize_field(payload)
+        elapsed_ms = (time.perf_counter() - start) * 1000.0
+        assert elapsed_ms < 200.0, f"{payload[:8]!r} took {elapsed_ms:.1f} ms"
+
+
+def test_sanitizer_rejects_input_over_the_cap():
+    from anki_mcp.core.sanitize import MAX_FIELD_CHARS, SanitizeInputTooLarge
+
+    clean, _fixes = sanitize_field("a" * MAX_FIELD_CHARS)
+    assert len(clean) == MAX_FIELD_CHARS
+
+    with pytest.raises(SanitizeInputTooLarge) as excinfo:
+        sanitize_field("a" * (MAX_FIELD_CHARS + 1))
+    message = str(excinfo.value)
+    assert "SANITIZE.INPUT_TOO_LARGE" in message
+    assert str(MAX_FIELD_CHARS) in message
+    # ValueError subclass: core/safe.py turns it into ARGUMENT.INVALID, never a traceback.
+    assert isinstance(excinfo.value, ValueError)

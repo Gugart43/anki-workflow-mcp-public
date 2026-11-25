@@ -14,6 +14,7 @@ Solves the critical fragility of long free-text fields in clinical flashcards:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from typing import Literal
 
 from anki_mcp.core.vocab import ALLOWED_TAGS, IMAGES_ONLY_TAGS
@@ -22,14 +23,17 @@ from anki_mcp.core.vocab import ALLOWED_TAGS, IMAGES_ONLY_TAGS
 _ALL_ALLOWED = ALLOWED_TAGS
 _ALL_IMAGES = ALLOWED_TAGS | IMAGES_ONLY_TAGS
 
-# HTML tag matcher: <(/?)tag_name(attrs)?>
-_TAG_RE = re.compile(
-    r"""<(/?)([a-zA-Z][a-zA-Z0-9]*)((\s+[^>]*?)?)(/?)>""",
-    re.DOTALL,
-)
+#: Hard input cap (characters) for :func:`sanitize_field`.
+#:
+#: A single Anki field is prose, not a document: 100k characters is roughly 50 pages.
+#: Refusing up front turns a pathological input into a clear diagnostic instead of a
+#: long scan, and bounds the cost of every downstream check.
+MAX_FIELD_CHARS: int = 100_000
 
-# HTML comments
-_COMMENT_RE = re.compile(r"""<!--.*?-->""", re.DOTALL)
+
+class SanitizeInputTooLarge(ValueError):
+    """Raised when a field exceeds :data:`MAX_FIELD_CHARS` (code ``SANITIZE.INPUT_TOO_LARGE``)."""
+
 
 # Valid entity matcher: &name; or &#123; or &#x1a;
 _ENTITY_RE = re.compile(r"""&(#\d+|#x[0-9a-fA-F]+|[a-zA-Z]+);""")
@@ -48,7 +52,91 @@ _AUTO_CLOSE_TAGS = (
     "mark",
     "sub",
     "sup",
+    "cite",
 )
+
+_COMMENT_TOKEN = "__COMMENT_TOKEN_{}__"
+
+
+def _is_ascii_letter(ch: str) -> bool:
+    return "a" <= ch <= "z" or "A" <= ch <= "Z"
+
+
+def _is_ascii_alnum(ch: str) -> bool:
+    return _is_ascii_letter(ch) or "0" <= ch <= "9"
+
+
+def _mask_comments(value: str, comments: list[str]) -> str:
+    """Replace every ``<!-- ... -->`` with a placeholder token, in one linear pass."""
+    out: list[str] = []
+    pos = 0
+    n = len(value)
+    while True:
+        start = value.find("<!--", pos)
+        if start < 0:
+            break
+        end = value.find("-->", start + 4)
+        if end < 0:
+            # No terminator from here on: no later ``<!--`` can close either.
+            break
+        out.append(value[pos:start])
+        out.append(_COMMENT_TOKEN.format(len(comments)))
+        comments.append(value[start : end + 3])
+        pos = end + 3
+    if not out:
+        return value
+    out.append(value[pos:n])
+    return "".join(out)
+
+
+def _iter_tags(value: str) -> Iterator[tuple[int, int, bool, str, bool]]:
+    """Yield ``(start, end, is_close, name, is_self_closing)`` for each HTML-looking tag.
+
+    Linear-time equivalent of the regex ``<(/?)([a-zA-Z][a-zA-Z0-9]*)((\\s+[^>]*?)?)(/?)>``
+    used before this scanner, including its acceptance rules:
+
+    * the tag name is ASCII ``[a-zA-Z][a-zA-Z0-9]*``;
+    * whatever follows the name up to the *first* ``>`` must be empty, exactly ``/``,
+      or start with whitespace — otherwise this ``<`` is plain text;
+    * a ``/`` right before ``>`` marks the tag self-closing.
+
+    Both ``str.find`` cursors only move forward, so the whole scan is O(n) even for
+    adversarial input such as ``"<a " * 8000`` (no ``>`` at all) or
+    ``"<ax" * 8000 + ">"`` (unterminated tag names).
+    """
+    n = len(value)
+    gt_pos = -1  # first '>' at or after the cursor below; -1 means "not resolved yet"
+    cursor = 0
+    while True:
+        start = value.find("<", cursor)
+        if start < 0:
+            return
+        pos = start + 1
+        is_close = False
+        if pos < n and value[pos] == "/":
+            is_close = True
+            pos += 1
+        if pos < n and _is_ascii_letter(value[pos]):
+            name_end = pos + 1
+            while name_end < n and _is_ascii_alnum(value[name_end]):
+                name_end += 1
+            if gt_pos < name_end:
+                gt_pos = value.find(">", name_end)
+                if gt_pos < 0:
+                    return  # no '>' ahead: no later '<' can close either
+            if name_end >= gt_pos:
+                is_self_closing = False
+            elif name_end + 1 == gt_pos and value[name_end] == "/":
+                is_self_closing = True
+            elif value[name_end].isspace():
+                is_self_closing = value[gt_pos - 1] == "/"
+            else:
+                cursor = start + 1
+                continue
+            yield (start, gt_pos + 1, is_close, value[pos:name_end], is_self_closing)
+            cursor = gt_pos + 1
+            continue
+        cursor = start + 1
 
 
 def sanitize_field(
@@ -60,9 +148,19 @@ def sanitize_field(
     """Sanitize a single card field value for guaranteed CSV and HTML safety.
 
     Returns (sanitized_string, list_of_fixes_applied).
+
+    Raises:
+        SanitizeInputTooLarge: when *value* exceeds :data:`MAX_FIELD_CHARS`.
     """
     if not value:
         return "", []
+
+    if len(value) > MAX_FIELD_CHARS:
+        raise SanitizeInputTooLarge(
+            f"SANITIZE.INPUT_TOO_LARGE: field has {len(value)} characters "
+            f"(limit {MAX_FIELD_CHARS}); split the content into smaller fields "
+            "before sanitizing"
+        )
 
     fixes: list[str] = []
 
@@ -96,60 +194,47 @@ def sanitize_field(
     # 4. Tokenize allowed HTML comments and tags vs plain text
     allowed = _ALL_IMAGES if is_images_field else _ALL_ALLOWED
 
-    # Mask comments temporarily
+    # Mask comments temporarily (linear scan, never backtracks)
     comments: list[str] = []
+    value = _mask_comments(value, comments)
 
-    def _mask_comment(m: re.Match[str]) -> str:
-        comments.append(m.group(0))
-        return f"__COMMENT_TOKEN_{len(comments) - 1}__"
-
-    value = _COMMENT_RE.sub(_mask_comment, value)
-
-    tokens: list[tuple[bool, str]] = []  # (is_tag, text)
+    tokens: list[
+        tuple[bool, str, str, bool, bool]
+    ] = []  # (is_tag, text, name, close, self_closing)
     last_idx = 0
 
-    for m in _TAG_RE.finditer(value):
-        start, end = m.span()
+    for start, end, is_close, tag_name, is_self_closing in _iter_tags(value):
         if start > last_idx:
-            tokens.append((False, value[last_idx:start]))
+            tokens.append((False, value[last_idx:start], "", False, False))
 
-        tag_name = m.group(2).lower()
-        if tag_name in allowed:
-            tokens.append((True, m.group(0)))
-        else:
-            # Tag not allowed -> treat as text containing brackets!
-            tokens.append((False, m.group(0)))
+        raw_tag = value[start:end]
+        name = tag_name.lower()
+        tokens.append((name in allowed, raw_tag, name, is_close, is_self_closing))
         last_idx = end
 
     if last_idx < len(value):
-        tokens.append((False, value[last_idx:]))
+        tokens.append((False, value[last_idx:], "", False, False))
 
     # 5. Process non-tag tokens: escape inequalities and bare &
     out_tokens: list[str] = []
     tag_stack: list[str] = []
 
-    for is_tag, text in tokens:
+    for is_tag, text, tname, is_close, is_self_closing in tokens:
         if is_tag:
             out_tokens.append(text)
-            # Track paired tags
-            m_tag = _TAG_RE.match(text)
-            if m_tag:
-                is_close = bool(m_tag.group(1))
-                tname = m_tag.group(2).lower()
-                is_self_closing = bool(m_tag.group(5)) or tname in {"br", "hr", "img"}
-                if not is_self_closing:
-                    if is_close:
-                        if tag_stack and tag_stack[-1] == tname:
+            # Track paired tags (metadata comes from the scanner, no re-parse)
+            if not (is_self_closing or tname in {"br", "hr", "img"}):
+                if is_close:
+                    if tag_stack and tag_stack[-1] == tname:
+                        tag_stack.pop()
+                    elif tname in tag_stack:
+                        # pop until matching
+                        while tag_stack and tag_stack[-1] != tname:
                             tag_stack.pop()
-                        elif tname in tag_stack:
-                            # pop until matching
-                            while tag_stack and tag_stack[-1] != tname:
-                                tag_stack.pop()
-                            if tag_stack:
-                                tag_stack.pop()
-                    else:
-                        if tname in _AUTO_CLOSE_TAGS:
-                            tag_stack.append(tname)
+                        if tag_stack:
+                            tag_stack.pop()
+                elif tname in _AUTO_CLOSE_TAGS:
+                    tag_stack.append(tname)
         else:
             # Non-tag text: escape inequalities
             if "<=" in text:

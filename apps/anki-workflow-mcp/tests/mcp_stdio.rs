@@ -182,6 +182,40 @@ fn extract_tool_payload(response: &Value) -> Value {
         .unwrap_or_else(|err| panic!("expected JSON text payload ({err}): {text}"))
 }
 
+/// Extracts an error payload and enforces the wire contract of `ToolErrorPayload`:
+/// `isError: true`, `violations` always present as an array, and `path` either absent
+/// or a non-empty string.
+fn extract_error_payload(response: &Value) -> Value {
+    assert_eq!(
+        response["result"]["isError"],
+        json!(true),
+        "expected isError response: {response}"
+    );
+    let payload = extract_tool_payload(response);
+    assert!(
+        payload.get("violations").is_some_and(Value::is_array),
+        "ToolErrorPayload.violations must always be emitted as an array: {payload}"
+    );
+    assert!(
+        payload.get("code").is_some_and(Value::is_string),
+        "ToolErrorPayload.code must always be emitted: {payload}"
+    );
+    if let Some(path) = payload.get("path") {
+        assert!(
+            path.as_str().is_some_and(|p| !p.is_empty()),
+            "ToolErrorPayload.path must be a non-empty string when present: {payload}"
+        );
+    }
+    payload
+}
+
+fn tool_schema<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+    &tools
+        .iter()
+        .find(|tool| tool["name"] == json!(name))
+        .unwrap_or_else(|| panic!("tool {name} must be listed"))["inputSchema"]
+}
+
 fn assert_typed_objects_deny_additional_properties(schema: &Value, path: &str) {
     let Some(obj) = schema.as_object() else {
         return;
@@ -383,6 +417,124 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
             }
         }
     }
+
+    // 3b. B22: campos que decidem comportamento expõem `description` no inputSchema.
+    fn description_of<'a>(schema: &'a Value, pointer: &[&str]) -> &'a str {
+        let mut node = schema;
+        for key in pointer {
+            node = &node[*key];
+        }
+        node.get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing description at {}", pointer.join(".")))
+    }
+
+    let compile_schema = tool_schema(tools, "cards_compile_drafts");
+    for prop in [
+        "auto_renumber_cloze",
+        "auto_purge_id_leaks",
+        "default_campo_estudo",
+    ] {
+        assert!(
+            !description_of(compile_schema, &["properties", prop]).is_empty(),
+            "cards_compile_drafts.{prop} must document its behavior"
+        );
+    }
+    // `compile_mode` / `mode` são `$ref` no contrato exportado: uma `description` ao lado do
+    // `$ref` duplicaria o tipo no .d.ts (`CompileMode1`/`QualityMode1`), então a doc desses
+    // campos vive na descrição da tool. A guarda do contrato exportado está em `mcp.rs`.
+    let compile_desc = tools
+        .iter()
+        .find(|tool| tool["name"] == json!("cards_compile_drafts"))
+        .and_then(|tool| tool["description"].as_str())
+        .unwrap_or_default();
+    for expected in [
+        "auto_renumber_cloze",
+        "auto_purge_id_leaks",
+        "default_campo_estudo",
+        "compile_mode",
+        "legacy_compat",
+        "strict_v2",
+        "COMPILE.INVALID_DRAFT",
+    ] {
+        assert!(
+            compile_desc.contains(expected),
+            "cards_compile_drafts description must document {expected}: {compile_desc}"
+        );
+    }
+
+    for tool_name in ["quality_prepare", "quality_evaluate"] {
+        let schema = tool_schema(tools, tool_name);
+        let source_row_doc = description_of(
+            schema,
+            &[
+                "properties",
+                "bindings",
+                "items",
+                "properties",
+                "source_row",
+            ],
+        );
+        assert!(
+            source_row_doc.contains("1-based") && source_row_doc.contains(">= 2"),
+            "{tool_name}.bindings[].source_row must explain the 1-based/header rule: {source_row_doc}"
+        );
+        let cloze_doc = description_of(
+            schema,
+            &[
+                "properties",
+                "bindings",
+                "items",
+                "properties",
+                "cloze_index",
+            ],
+        );
+        assert!(
+            cloze_doc.contains("CL") && cloze_doc.contains("QA"),
+            "{tool_name}.bindings[].cloze_index must explain the CL/QA rule: {cloze_doc}"
+        );
+        let quote_doc = description_of(
+            schema,
+            &[
+                "properties",
+                "bindings",
+                "items",
+                "properties",
+                "evidence",
+                "items",
+                "properties",
+                "quote",
+            ],
+        );
+        assert!(
+            quote_doc.contains("verbatim"),
+            "{tool_name} evidence.quote must require a verbatim substring: {quote_doc}"
+        );
+        let desc = tools
+            .iter()
+            .find(|tool| tool["name"] == json!(tool_name))
+            .and_then(|tool| tool["description"].as_str())
+            .unwrap_or_default();
+        assert!(
+            desc.contains("`mode`"),
+            "{tool_name} description must document `mode`: {desc}"
+        );
+    }
+
+    let snapshot_hash_doc = description_of(
+        tool_schema(tools, "quality_evaluate"),
+        &[
+            "properties",
+            "reviews",
+            "items",
+            "properties",
+            "snapshot_hash",
+        ],
+    );
+    assert!(
+        snapshot_hash_doc.contains("snapshot_hash"),
+        "quality_evaluate.reviews[].snapshot_hash must document the snapshot it must echo: {snapshot_hash_doc}"
+    );
 
     // 4. tools/call generation_contract_get
     let contract_resp = client.request(
@@ -689,6 +841,12 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         })),
     );
     assert_eq!(export_fail_resp["result"]["isError"], json!(true));
+    let export_fail_payload = extract_error_payload(&export_fail_resp);
+    assert_eq!(
+        export_fail_payload["violations"],
+        json!([]),
+        "export errors must still carry an empty violations array"
+    );
 
     // 9. Unknown top-level and nested argument rejection => isError: true
     let bad_contract_resp = client.request(
@@ -700,6 +858,36 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         })),
     );
     assert_eq!(bad_contract_resp["result"]["isError"], json!(true));
+    let bad_contract_payload = extract_error_payload(&bad_contract_resp);
+    assert_eq!(bad_contract_payload["code"], json!("INVALID_ARGUMENTS"));
+    assert_eq!(bad_contract_payload["violations"], json!([]));
+
+    // 9a. Erro na RAIZ do objeto: `serde_path_to_error` devolve "." e antes o payload saía com
+    // `"path": "."`. O contrato só admite path ausente ou caminho não vazio, então raiz é ruído.
+    let root_level_resp = client.request(
+        13,
+        "tools/call",
+        Some(json!({
+            "name": "quality_prepare",
+            "arguments": {}
+        })),
+    );
+    assert_eq!(root_level_resp["result"]["isError"], json!(true));
+    let root_level_payload = extract_error_payload(&root_level_resp);
+    assert_eq!(root_level_payload["code"], json!("INVALID_ARGUMENTS"));
+    assert!(
+        root_level_payload.get("path").is_none(),
+        "root-level argument errors must omit path entirely: {root_level_payload}"
+    );
+    let root_level_message = root_level_payload["error"].as_str().unwrap_or_default();
+    assert!(
+        !root_level_message.contains("at `.`"),
+        "root-level argument errors must not name `.` as a path: {root_level_message}"
+    );
+    assert!(
+        root_level_message.contains("Invalid tool arguments:"),
+        "root-level message must stay the path-less form: {root_level_message}"
+    );
 
     let bad_quality_resp = client.request(
         9,
@@ -723,6 +911,20 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         })),
     );
     assert_eq!(bad_quality_resp["result"]["isError"], json!(true));
+    let bad_quality_payload = extract_error_payload(&bad_quality_resp);
+    assert_eq!(bad_quality_payload["code"], json!("INVALID_ARGUMENTS"));
+    assert_eq!(
+        bad_quality_payload["path"],
+        json!("sources[0].extra_nested"),
+        "nested argument errors must expose the failing element path"
+    );
+    assert!(
+        bad_quality_payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("at `sources[0].extra_nested`"),
+        "message must name the failing path: {bad_quality_payload}"
+    );
 
     // 9b. quality_prepare rejects reviews field
     let prep_with_reviews_resp = client.request(
@@ -738,6 +940,12 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
         })),
     );
     assert_eq!(prep_with_reviews_resp["result"]["isError"], json!(true));
+    let prep_with_reviews_payload = extract_error_payload(&prep_with_reviews_resp);
+    assert_eq!(
+        prep_with_reviews_payload["code"],
+        json!("INVALID_ARGUMENTS")
+    );
+    assert_eq!(prep_with_reviews_payload["path"], json!("reviews"));
 
     // 9c. quality_evaluate accumulates structured range violations
     let eval_range_violations_resp = client.request(
@@ -766,11 +974,14 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
             }
         })),
     );
-    assert_eq!(eval_range_violations_resp["result"]["isError"], json!(true));
-    let eval_violation_payload = extract_tool_payload(&eval_range_violations_resp);
+    let eval_violation_payload = extract_error_payload(&eval_range_violations_resp);
     assert_eq!(
         eval_violation_payload["code"],
         json!("INVALID_INPUT_RANGES")
+    );
+    assert!(
+        eval_violation_payload.get("path").is_none(),
+        "range violations carry structured paths inside violations[], not a top-level path"
     );
     let vios = eval_violation_payload["violations"]
         .as_array()
@@ -778,6 +989,45 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     assert_eq!(vios.len(), 2);
     assert_eq!(vios[0]["code"], json!("INVALID_SOURCE_ROW"));
     assert_eq!(vios[1]["code"], json!("INVALID_CLOZE_INDEX"));
+
+    // 9d. enum inválido em args aninhados expõe o path do elemento
+    let nested_enum_resp = client.request(
+        92,
+        "tools/call",
+        Some(json!({
+            "name": "quality_evaluate",
+            "arguments": {
+                "qa_csv": "",
+                "cloze_csv": "",
+                "reviews": [{
+                    "note_type": "QA",
+                    "source_row": 2,
+                    "snapshot_hash": "h",
+                    "reviewer": "r",
+                    "verdict": "maybe",
+                    "rationale": "ok",
+                    "dimensions": {
+                        "source_fidelity": true,
+                        "atomic_retrieval": true,
+                        "context_sufficient": true,
+                        "no_answer_leak": true,
+                        "clinically_relevant": true,
+                        "notes_appropriate": true,
+                        "media_appropriate": true
+                    }
+                }]
+            }
+        })),
+    );
+    let nested_enum_payload = extract_error_payload(&nested_enum_resp);
+    assert_eq!(nested_enum_payload["code"], json!("INVALID_ARGUMENTS"));
+    assert_eq!(nested_enum_payload["path"], json!("reviews[0].verdict"));
+    assert!(
+        nested_enum_payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("maybe")
+    );
 
     // 10. Unknown tool name => MCP invalid params (-32602)
     let unknown_tool_resp = client.request(
@@ -816,5 +1066,203 @@ fn mcp_stdio_end_to_end_contract_tools_errors_and_shutdown() {
     assert!(
         !stderr.contains(canary_marker),
         "stderr must never log card/source values"
+    );
+}
+
+fn resolve_property_schema<'a>(schema: &'a Value, name: &str) -> &'a Value {
+    let property = &schema["properties"][name];
+    let Some(def_name) = property
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|pointer| pointer.strip_prefix("#/$defs/"))
+    else {
+        return property;
+    };
+    schema
+        .get("$defs")
+        .and_then(|defs| defs.get(def_name))
+        .unwrap_or(property)
+}
+
+fn compile_drafts_call(id: i64, args: Value, client: &mut McpChild) -> Value {
+    client.request(
+        id,
+        "tools/call",
+        Some(json!({"name": "cards_compile_drafts", "arguments": args})),
+    )
+}
+
+#[test]
+fn mcp_stdio_compile_mode_contract_and_gating() {
+    let mut client = McpChild::spawn();
+
+    let init_resp = client.request(
+        1,
+        "initialize",
+        Some(json!({
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "mcp-stdio-compile-mode-test", "version": "0.1.0"}
+        })),
+    );
+    assert!(
+        init_resp.get("error").is_none(),
+        "initialize returned error: {init_resp}"
+    );
+    client.notify("notifications/initialized", None);
+
+    // 1. tools/list expõe compile_mode com enum fechado e default fail-safe.
+    let list_resp = client.request(2, "tools/list", None);
+    let tools = list_resp["result"]["tools"]
+        .as_array()
+        .expect("result.tools must be an array");
+    let compile_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == json!("cards_compile_drafts"))
+        .expect("cards_compile_drafts must be listed");
+    let schema = &compile_tool["inputSchema"];
+    let mode_schema = resolve_property_schema(schema, "compile_mode");
+    let mut variants: Vec<String> = mode_schema["enum"]
+        .as_array()
+        .expect("compile_mode must expose a closed enum")
+        .iter()
+        .map(|variant| variant.as_str().expect("enum variant string").to_string())
+        .collect();
+    variants.sort();
+    assert_eq!(variants, vec!["legacy_compat", "strict_v2"]);
+    assert_eq!(
+        mode_schema.get("default"),
+        Some(&json!("legacy_compat")),
+        "compile_mode default must be legacy_compat: {mode_schema}"
+    );
+
+    let legacy_notes_draft = json!({
+        "tipo": "QA",
+        "enunciado_ou_sentenca": "Pergunta sintetica do gate de modo?",
+        "resposta": "Resposta sintetica.",
+        "notas_adicionais": {"fisiopatologia": "Mecanismo sintetico legado."}
+    });
+
+    // 2. Sem compile_mode: comportamento atual (legacy_compat) já que o lote é válido.
+    let default_resp = compile_drafts_call(
+        3,
+        json!({"drafts": [legacy_notes_draft.clone()]}),
+        &mut client,
+    );
+    assert_ne!(
+        default_resp["result"].get("isError"),
+        Some(&json!(true)),
+        "omitting compile_mode must keep current behavior: {default_resp}"
+    );
+    let default_payload = extract_tool_payload(&default_resp);
+    assert_eq!(default_payload["stats"]["qa_count"], json!(1));
+    assert!(
+        default_payload["qa_csv"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Mecanismo sintetico legado."),
+        "legacy_compat must render legacy notes"
+    );
+
+    // 3. compile_mode: strict_v2 + campo legado => isError com COMPILE.INVALID_DRAFT.
+    let strict_legacy_resp = compile_drafts_call(
+        4,
+        json!({"drafts": [legacy_notes_draft], "compile_mode": "strict_v2"}),
+        &mut client,
+    );
+    assert_eq!(
+        strict_legacy_resp["result"]["isError"],
+        json!(true),
+        "strict_v2 must reject legacy notes fields: {strict_legacy_resp}"
+    );
+    let strict_legacy_payload = extract_error_payload(&strict_legacy_resp);
+    assert_eq!(
+        strict_legacy_payload["code"],
+        json!("COMPILE.INVALID_DRAFT"),
+        "draft compile failures must not be reported as INVALID_ARGUMENTS"
+    );
+    assert_eq!(strict_legacy_payload["violations"], json!([]));
+    let strict_legacy_error = strict_legacy_payload["error"]
+        .as_str()
+        .expect("error string")
+        .to_string();
+    assert!(
+        strict_legacy_error.contains("drafts[0]: campo legado `fisiopatologia`"),
+        "unexpected strict_v2 error: {strict_legacy_error}"
+    );
+
+    // 4. compile_mode: strict_v2 + NoteDocument canônico => aceito e renderizado.
+    let canonical_resp = compile_drafts_call(
+        5,
+        json!({
+            "drafts": [{
+                "tipo": "QA",
+                "enunciado_ou_sentenca": "Pergunta sintetica canonica?",
+                "resposta": "Resposta sintetica.",
+                "notas_adicionais": {
+                    "blocos": [{"tipo": "paragrafo", "titulo": "Contexto", "texto": "Texto canonico sintetico."}],
+                    "fontes": [{"titulo": "Fonte sintetica"}]
+                }
+            }],
+            "compile_mode": "strict_v2"
+        }),
+        &mut client,
+    );
+    assert_ne!(
+        canonical_resp["result"].get("isError"),
+        Some(&json!(true)),
+        "strict_v2 must accept canonical NoteDocument: {canonical_resp}"
+    );
+    let canonical_payload = extract_tool_payload(&canonical_resp);
+    let canonical_csv = canonical_payload["qa_csv"]
+        .as_str()
+        .expect("qa_csv string")
+        .to_string();
+    assert!(canonical_csv.contains("anki-note-section"));
+    assert!(canonical_csv.contains("Texto canonico sintetico."));
+
+    // 5. compile_mode inválido => INVALID_ARGUMENTS com path do enum (deny_unknown_fields/enum fechado).
+    let invalid_mode_resp = compile_drafts_call(
+        6,
+        json!({
+            "drafts": [{"tipo": "QA", "enunciado_ou_sentenca": "P?", "resposta": "R."}],
+            "compile_mode": "strict_v3"
+        }),
+        &mut client,
+    );
+    let invalid_mode_payload = extract_error_payload(&invalid_mode_resp);
+    assert_eq!(invalid_mode_payload["code"], json!("INVALID_ARGUMENTS"));
+    assert_eq!(
+        invalid_mode_payload["path"],
+        json!("compile_mode"),
+        "enum errors must expose the failing argument: {invalid_mode_payload}"
+    );
+    assert!(
+        invalid_mode_payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Invalid tool arguments at `compile_mode`"),
+        "unexpected invalid-mode error: {invalid_mode_payload}"
+    );
+    assert!(
+        invalid_mode_payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("strict_v3"),
+        "error must quote the rejected value: {invalid_mode_payload}"
+    );
+
+    // 6. Sessão segue utilizável e encerra limpo.
+    let follow_up_resp = client.request(
+        7,
+        "tools/call",
+        Some(json!({"name": "generation_contract_get", "arguments": {}})),
+    );
+    assert_ne!(follow_up_resp["result"].get("isError"), Some(&json!(true)));
+
+    let (status, stderr, _stdout_lines) = client.close_and_wait();
+    assert!(
+        status.success(),
+        "server exited with non-zero status {status:?}; stderr: {stderr}"
     );
 }

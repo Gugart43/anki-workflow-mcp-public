@@ -23,12 +23,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "code": {
+      "description": "Stable machine-readable error code: `INVALID_ARGUMENTS` (argument parse/decode),\n`COMPILE.INVALID_DRAFT` (draft decode/normalize/compile), `INVALID_INPUT_RANGES`\n(structured range violations), `INTERNAL.SERIALIZE` (result serialization),\n`EXPORT.*` (export domain errors).",
       "type": "string"
     },
     "error": {
+      "description": "Single-line, sanitized human-readable error message.",
       "type": "string"
     },
+    "path": {
+      "description": "JSON path of the offending argument element, omitted when not applicable.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "violations": {
+      "description": "Structured field-level violations, always present (empty when there are none).",
       "items": {
         "$ref": "#/$defs/InputViolation"
       },

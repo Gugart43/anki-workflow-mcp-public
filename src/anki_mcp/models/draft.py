@@ -141,14 +141,17 @@ class MediaFigure(BaseModel):
         elif style_key in _SEMANTIC_STYLE_CLASSES:
             fig_attr = f' class="{_SEMANTIC_STYLE_CLASSES[style_key]}"'
         else:
-            fig_attr = f' style="{self.style}"'
+            escaped_style = html.escape(self.style.strip(), quote=True)
+            fig_attr = f' style="{escaped_style}"'
 
         if cap:
-            cap_style = f' style="{self.caption_style}"' if self.caption_style else ""
+            escaped_cap_style = html.escape(self.caption_style.strip(), quote=True)
+            cap_style = f' style="{escaped_cap_style}"' if self.caption_style else ""
             cap_tag = f"<figcaption{cap_style}>{cap}</figcaption>"
         else:
             cap_tag = ""
-        return f'<figure{fig_attr}><img src="{fn}"{alt_attr}>{cap_tag}</figure>'
+        escaped_fn = html.escape(fn, quote=True)
+        return f'<figure{fig_attr}><img src="{escaped_fn}"{alt_attr}>{cap_tag}</figure>'
 
 
 def parse_images_html_to_figures(images_val: Any) -> list[MediaFigure]:

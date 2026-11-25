@@ -29,12 +29,18 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "mechanics"
       ]
     },
     {
       "annotations": null,
+      "collision": {
+        "also_served_by": "python-legacy",
+        "params_compatible": false,
+        "reason": "Same name, different contract: the Python legacy tool patches a persistent staging file (`staging_path`, 0-based `card_index`, `patch_json` string), while the Rust server is a pure in-memory patcher taking `draft` and `updates` objects and performing no disk I/O. On the Rust server use `mcp_batch_patch_draft_args`."
+      },
       "description": "Apply a surgical patch directly to a CardDraft within a persistent batch staging file. staging_path: path to drafts.jsonl or .staging_{batch_id}/drafts.jsonl. card_index: 0-based index of card to update. patch_json: JSON string with 'updates'.",
       "name": "batch_patch_draft",
       "output_schema": {
@@ -72,6 +78,7 @@
         ],
         "type": "object"
       },
+      "served_by": "rust",
       "tags": [
         "compiler"
       ]
@@ -100,6 +107,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "compiler"
       ]
@@ -133,12 +141,18 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "compiler"
       ]
     },
     {
       "annotations": null,
+      "collision": {
+        "also_served_by": "python-legacy",
+        "params_compatible": false,
+        "reason": "Same name, different contract: the Python legacy tool takes `drafts_json` (a JSON string of a list or {\"cards\": [...]}) plus `auto_renumber`/`auto_purge_ids`, while the Rust server takes a typed `drafts` array plus `auto_renumber_cloze`/`auto_purge_id_leaks`/`default_campo_estudo`/`compile_mode`. On the Rust server use `mcp_compile_drafts_args`."
+      },
       "description": "Compile a list of structured CardDraft JSON objects into AnkiMBR-compliant QA and Cloze CSV blocks. Applies deterministic HTML escaping, sequential cloze renumbering (c1..cN), ID leak purging, markdown table conversion, and pipe-delimiter escaping. Accepts a JSON string of a list or {'cards': [...]}. Returns qa_csv, cloze_csv, and compilation stats.",
       "name": "cards_compile_drafts",
       "output_schema": {
@@ -167,6 +181,7 @@
         ],
         "type": "object"
       },
+      "served_by": "rust",
       "tags": [
         "compiler"
       ]
@@ -202,6 +217,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -227,6 +243,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -252,6 +269,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -287,6 +305,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -322,6 +341,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -354,6 +374,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "mechanics"
       ]
@@ -381,6 +402,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "mechanics"
       ]
@@ -405,6 +427,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline"
       ]
@@ -433,6 +456,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "hierarchy"
       ]
@@ -463,6 +487,7 @@
         },
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "hierarchy"
       ]
@@ -491,6 +516,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "hierarchy"
       ]
@@ -517,6 +543,7 @@
         },
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "hierarchy"
       ]
@@ -584,6 +611,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline"
       ]
@@ -620,6 +648,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline"
       ]
@@ -648,6 +677,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -693,6 +723,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -721,6 +752,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -756,6 +788,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -803,6 +836,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -867,6 +901,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -895,6 +930,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -931,6 +967,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -975,6 +1012,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -1003,6 +1041,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -1051,6 +1090,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "media"
       ]
@@ -1095,6 +1135,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline"
       ]
@@ -1134,6 +1175,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline"
       ]
@@ -1185,6 +1227,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "pipeline",
         "validate"
@@ -1218,6 +1261,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "mechanics"
       ]
@@ -1242,6 +1286,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "tables"
       ]
@@ -1266,6 +1311,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "tables"
       ]
@@ -1294,6 +1340,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "state"
       ]
@@ -1344,6 +1391,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -1395,6 +1443,7 @@
         },
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "triage"
       ]
@@ -1447,6 +1496,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1475,6 +1525,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1515,6 +1566,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1547,6 +1599,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1575,6 +1628,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1607,6 +1661,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1643,6 +1698,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1675,6 +1731,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]
@@ -1711,6 +1768,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "tables",
         "validate"
@@ -1744,6 +1802,7 @@
         ],
         "type": "object"
       },
+      "served_by": "python-legacy",
       "tags": [
         "validate"
       ]

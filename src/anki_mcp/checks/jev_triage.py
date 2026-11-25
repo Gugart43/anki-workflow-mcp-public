@@ -11,12 +11,15 @@ Implements section-based semantic triage:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import math
 import os
 import re
+import socket
 import statistics
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Literal
 
@@ -149,6 +152,98 @@ def get_typesafe_api_key() -> str | None:
     )
 
 
+# ── SSRF guards for the SystemOne client (B30) ────────────────────────────────
+
+
+class SystemOneEndpointError(RuntimeError):
+    """Base for SystemOne calls refused before (or instead of) using the response."""
+
+
+class InsecureSystemOneEndpoint(SystemOneEndpointError):
+    """Endpoint refused because it is not a plain, public `https://` URL (B30)."""
+
+
+class SystemOneRedirectBlocked(SystemOneEndpointError):
+    """A SystemOne backend answered 3xx; the redirect is refused, never followed (B30)."""
+
+
+class _BlockRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse every 3xx instead of resending `Authorization: Bearer` to `Location`.
+
+    `urllib`'s default redirect handler rebuilds the request keeping the original
+    headers (only `Content-Length`/`Content-Type` are dropped), so following a
+    redirect would leak the API key to whatever host the response points at.
+    """
+
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: Any,
+        msg: Any,
+        headers: Any,
+        newurl: Any,
+    ) -> Any:
+        raise SystemOneRedirectBlocked(
+            f"SystemOne redirect blocked (HTTP {code}) to {newurl!r}: "
+            "redirects are refused so the bearer token is never resent"
+        )
+
+
+def _validate_systemone_endpoint(endpoint: str) -> str:
+    """Return `endpoint` unchanged or raise `InsecureSystemOneEndpoint`.
+
+    Enforced rules (B30):
+    1. absolute `https://` URL — `http://`, `file://`, `ftp://`, scheme-less or
+       relative values are refused;
+    2. host present;
+    3. host must not resolve to loopback/link-local/private/reserved addresses.
+       Resolution failure is not fatal: the network layer reports the real error.
+    """
+    cleaned = endpoint.strip()
+    parsed = urllib.parse.urlsplit(cleaned)
+    scheme = parsed.scheme.lower()
+    if scheme != "https":
+        scheme_label = scheme or "<missing>"
+        raise InsecureSystemOneEndpoint(
+            f"SystemOne endpoint must use https:// (got scheme {scheme_label!r}): {cleaned!r}"
+        )
+    host = parsed.hostname or ""
+    if not host:
+        raise InsecureSystemOneEndpoint(f"SystemOne endpoint must include a host: {cleaned!r}")
+    if host.lower() == "localhost":
+        raise InsecureSystemOneEndpoint(
+            f"SystemOne endpoint host {host!r} is loopback; refusing non-public destination"
+        )
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except OSError:
+        # Sem resolução local (offline/DNS indisponível): a conexão real reportará o erro.
+        return cleaned
+    for info in resolved:
+        address = str(info[4][0]).split("%", 1)[0]
+        try:
+            parsed_ip = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if not parsed_ip.is_global:
+            raise InsecureSystemOneEndpoint(
+                f"SystemOne endpoint host {host!r} resolves to non-public address "
+                f"{address!r}; refusing loopback/link-local/private destination"
+            )
+    return cleaned
+
+
+def _build_systemone_opener() -> urllib.request.OpenerDirector:
+    """Build a per-call opener whose redirect handler refuses every 3xx (B30)."""
+    return urllib.request.build_opener(_BlockRedirects())
+
+
+def _open_systemone(req: urllib.request.Request, timeout_s: float) -> Any:
+    """POST to a SystemOne backend with redirects disabled (single seam for mocks)."""
+    return _build_systemone_opener().open(req, timeout=timeout_s)
+
+
 def _post_systemone_with_fallback(
     state: str,
     questions: dict[str, Any],
@@ -156,7 +251,14 @@ def _post_systemone_with_fallback(
     explicit_api_key: str | None = None,
     timeout_s: float = 6.0,
 ) -> dict[str, Any]:
-    """Call KnowLine-31B-Gen1 primary and fall back to Jev TypeSafe (direct -> OpenRouter)."""
+    """Call KnowLine-31B-Gen1 primary and fall back to Jev TypeSafe (direct -> OpenRouter).
+
+    Todos os endpoints são validados antes de qualquer I/O: apenas `https://`
+    público é aceito (`InsecureSystemOneEndpoint`). Uma resposta 3xx é erro fatal
+    da chamada (`SystemOneRedirectBlocked`): o `Location` nunca é seguido, então o
+    `Authorization: Bearer` não é reenviado a outro host — inclusive quando existem
+    provedores de fallback configurados.
+    """
     targets: list[tuple[str, str, str, dict[str, str]]]
     if explicit_api_key:
         targets = [(TYPESAFE_ENDPOINT, DEFAULT_JEV_MODEL, explicit_api_key, {})]
@@ -188,6 +290,8 @@ def _post_systemone_with_fallback(
 
     last_exc: Exception | None = None
     for endpoint, model, key, extra_hdrs in targets:
+        # B30: recusa esquema/host inseguro antes de montar o request (sem I/O).
+        _validate_systemone_endpoint(endpoint)
         payload = {"model": model, "state": state, "questions": questions}
         req = urllib.request.Request(
             endpoint,
@@ -201,10 +305,14 @@ def _post_systemone_with_fallback(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            with _open_systemone(req, timeout_s) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if isinstance(data, dict) and isinstance(data.get("answers"), dict):
                     return data
+        except SystemOneEndpointError:
+            # 3xx é erro do provedor, não motivo para tentar outro host com a mesma
+            # credencial: propaga em vez de esconder o redirect atrás do fallback.
+            raise
         except Exception as exc:
             last_exc = exc
             continue

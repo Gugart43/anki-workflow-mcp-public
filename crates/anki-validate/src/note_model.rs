@@ -9,9 +9,10 @@ use crate::table_render::TableSpec;
 use crate::validated_flow::ValidatedFlow;
 
 /// Modo de compilação do documento de notas adicionais.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CompileMode {
+    #[default]
     LegacyCompat,
     StrictV2,
 }

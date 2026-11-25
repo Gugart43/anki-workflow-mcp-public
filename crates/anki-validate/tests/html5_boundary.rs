@@ -189,6 +189,34 @@ fn active_content_attacks_fail_closed() {
             "unknown class",
         ),
         ("<p id=\"target\">P com id</p>", "disallowed attribute id"),
+        // B13: a decisão estrutural não pode afrouxar nenhum destes.
+        ("<svg/onload=alert(1)>", "svg slash onload"),
+        ("<SVG ONLOAD=\"alert(1)\"></SVG>", "uppercase svg onload"),
+        (
+            "<span style=\"background:url(javascript:alert(1))\">CSS url javascript</span>",
+            "css url javascript",
+        ),
+        (
+            "<span STYLE=\"background:url(javascript:alert(1))\">CSS url upper</span>",
+            "css url javascript uppercase attribute",
+        ),
+        (
+            "<meta http-equiv=\"refresh\" content=\"0;url=javascript:alert(1)\">",
+            "meta refresh",
+        ),
+        (
+            "<template><script>alert(1)</script></template>",
+            "template with script",
+        ),
+        (
+            "<!--<script>alert(1)</script>-->",
+            "script hidden in comment",
+        ),
+        ("<b onclick=alert(1)>Sem aspas</b>", "unquoted onclick"),
+        (
+            "<span class=\"destaque\"><script>alert(1)</script></span>",
+            "script inside allowed class",
+        ),
     ];
 
     for (payload, description) in attack_payloads {
@@ -324,4 +352,161 @@ fn sanitize_field_preserves_f2_semantic_structure() {
     assert!(sanitized.contains("<details class=\"anki-detail\">"));
     assert!(sanitized.contains("<footer class=\"anki-sources\">"));
     assert!(sanitized.contains("<small>Fonte</small>"));
+}
+
+/// B13: as formas alternativas de HTML SEGURO que o portão rejeitava por comparar bytes.
+#[test]
+fn alternative_safe_serializations_pass_gate_and_compiler() {
+    let safe_cases = [
+        // case de tag
+        "<B>Negrito</B>",
+        // case de tag e de atributos
+        "<IMG SRC=\"fig1.png\" ALT=\"Foto\">",
+        // comentário (o sanitizador remove de propósito)
+        "<p>Texto</p><!-- comentário benigno -->",
+        // espaço à direita em valor de classe
+        "<span class=\"destaque \">Destaque</span>",
+        // entidade em atributo (`&gt;` decodificado para `>`)
+        "<span title=\"a &gt; b\">Comparação</span>",
+        // conjunto combinado
+        "<span class=\"destaque \" title=\"a &gt; b\" STYLE=\"color: red\">Combinado</span>",
+    ];
+
+    for case in safe_cases {
+        let draft = json!({
+            "tipo": "QA",
+            "enunciado_ou_sentenca": "Pergunta de teste?",
+            "resposta": "Resposta",
+            "notas_adicionais": case
+        });
+        assert!(
+            compile_drafts(&[draft], true, true, "").is_ok(),
+            "compiler must accept benign serialization: {case}"
+        );
+
+        let input = QualityInput {
+            qa_csv: format!("{QA_HEADER_CANONICAL}\nPergunta?|Resposta|{case}|||Ref|tag"),
+            cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+            reviews: vec![],
+        };
+        let report = prepare_quality(&input);
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "QUALITY.UNSAFE_HTML"),
+            "quality gate must accept benign serialization: {case}"
+        );
+    }
+}
+
+/// B14: profundidade de aninhamento acima do limite é rejeitada (32 ainda passa).
+#[test]
+fn nesting_depth_limit_is_enforced_at_gate() {
+    for (depth, rejected) in [(32usize, false), (33usize, true), (512usize, true)] {
+        let payload =
+            format!("{}{}", "<div>".repeat(depth), "texto".to_owned()) + &"</div>".repeat(depth);
+        let input = QualityInput {
+            qa_csv: format!("{QA_HEADER_CANONICAL}\nPergunta?|Resposta|{payload}|||Ref|tag"),
+            cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+            mode: QualityMode::Strict,
+            sources: vec![],
+            obligations: vec![],
+            bindings: vec![],
+            reviews: vec![],
+        };
+        let report = prepare_quality(&input);
+        let deep = report
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "HTML.NESTING_TOO_DEEP");
+        let unsafe_flagged = report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "QUALITY.UNSAFE_HTML");
+        assert_eq!(
+            deep.is_some(),
+            rejected,
+            "depth={depth} expected rejection={rejected}; diagnostics={:?}",
+            report.diagnostics
+        );
+        // Profundidade nunca é reportada como conteúdo ativo: são causas diferentes.
+        assert!(
+            !unsafe_flagged,
+            "depth={depth} must not be reported as active content: {:?}",
+            report.diagnostics
+        );
+        if let Some(diag) = deep {
+            // A mensagem cita o limite real (32) e a profundidade medida.
+            assert!(
+                diag.message.contains("32") && diag.message.contains(&depth.to_string()),
+                "message must cite the real limit and the measured depth: {}",
+                diag.message
+            );
+            assert_eq!(
+                report.verdict, "FAIL",
+                "depth={depth}: limit violation must stay fail-closed"
+            );
+        }
+    }
+}
+
+/// B14: 20.000 `<div>` (220 KB) era ACEITO após 4,1 s (release) / 72,1 s (debug).
+#[test]
+fn deep_nesting_payloads_are_rejected_in_bounded_time() {
+    use std::time::{Duration, Instant};
+
+    let payload = format!("{}{}", "<div>".repeat(20_000), "</div>".repeat(20_000));
+    assert!(payload.len() > 200_000);
+
+    // Compilador: a decisão é O(n) e corta antes do parse (medido ~0,6 ms em debug).
+    let draft = json!({
+        "tipo": "QA",
+        "enunciado_ou_sentenca": "Pergunta de teste?",
+        "resposta": payload
+    });
+    let started = Instant::now();
+    assert!(
+        compile_drafts(&[draft], true, true, "").is_err(),
+        "20k nested divs must be rejected by the compiler"
+    );
+    let compiler_elapsed = started.elapsed();
+    assert!(
+        compiler_elapsed < Duration::from_secs(2),
+        "compiler took {compiler_elapsed:?} for a 20k-nesting payload"
+    );
+
+    // Portão de qualidade: rejeita. O custo residual (~2 s em debug, medido) é de checagens
+    // não-HTML sobre uma linha de CSV de 220 KB; o parse foi cortado pelo limite. Folga
+    // generosa para não flocar — voltar a parsear custava ~72 s.
+    let input = QualityInput {
+        qa_csv: format!("{QA_HEADER_CANONICAL}\nPergunta?|Resposta|{payload}|||Ref|tag"),
+        cloze_csv: CLOZE_HEADER_CANONICAL.to_owned(),
+        mode: QualityMode::Strict,
+        sources: vec![],
+        obligations: vec![],
+        bindings: vec![],
+        reviews: vec![],
+    };
+    let started = Instant::now();
+    let report = prepare_quality(&input);
+    let gate_elapsed = started.elapsed();
+    // Rejeitado pelo código ESPECÍFICO: o payload também estoura os 16 KiB, mas o motivo
+    // reportado é a profundidade (é ela que custa caro no parser).
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "HTML.NESTING_TOO_DEEP"),
+        "20k nested divs must be rejected as too-deep by the quality gate: {:?}",
+        report.diagnostics
+    );
+    assert!(
+        gate_elapsed < Duration::from_secs(15),
+        "gate took {gate_elapsed:?} for a 20k-nesting payload"
+    );
 }

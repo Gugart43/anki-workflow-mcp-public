@@ -1,0 +1,49 @@
+{
+  "contract_version": "2",
+  "generated_by": "cargo run --locked -p anki-workflow-mcp --bin export-schemas",
+  "tool_count": 7,
+  "tools": [
+    {
+      "args_schema": "mcp_batch_patch_draft_args.schema.json",
+      "name": "batch_patch_draft",
+      "output_schema_present": false,
+      "result_schema": null
+    },
+    {
+      "args_schema": "mcp_compile_drafts_args.schema.json",
+      "name": "cards_compile_drafts",
+      "output_schema_present": false,
+      "result_schema": null
+    },
+    {
+      "args_schema": "mcp_export_reviewed_files_args.schema.json",
+      "name": "export_reviewed_files",
+      "output_schema_present": true,
+      "result_schema": "mcp_export_reviewed_files_result.schema.json"
+    },
+    {
+      "args_schema": "mcp_empty_args.schema.json",
+      "name": "generation_contract_get",
+      "output_schema_present": false,
+      "result_schema": null
+    },
+    {
+      "args_schema": "mcp_quality_evaluate_args.schema.json",
+      "name": "quality_evaluate",
+      "output_schema_present": false,
+      "result_schema": null
+    },
+    {
+      "args_schema": "mcp_quality_prepare_args.schema.json",
+      "name": "quality_prepare",
+      "output_schema_present": false,
+      "result_schema": null
+    },
+    {
+      "args_schema": "mcp_review_batch_information_args.schema.json",
+      "name": "review_batch_information",
+      "output_schema_present": false,
+      "result_schema": null
+    }
+  ]
+}

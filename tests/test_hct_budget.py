@@ -325,7 +325,12 @@ def test_topic_budget_plan_augmented_with_must_cover(tmp_path: Path):
 
 def test_jev_network_fallback_on_error():
     """Ensure network failures or API exceptions fall back gracefully without crashing."""
-    with patch("urllib.request.urlopen", side_effect=Exception("Connection refused")):
+    # B30: o cliente SystemOne passou a usar um opener próprio (redirects
+    # recusados), então o seam mockável é `_open_systemone`, não `urlopen`.
+    with patch(
+        "anki_mcp.checks.jev_triage._open_systemone",
+        side_effect=Exception("Connection refused"),
+    ):
         eval_res = evaluate_topic_budget(
             text=GOLDEN_OACR_EMERGENCY,
             topic="OACR",

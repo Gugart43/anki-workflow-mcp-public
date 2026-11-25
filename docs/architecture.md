@@ -11,7 +11,7 @@ Rust é a fonte única de verdade de domínio, parsing, segurança HTML5 e servi
                    ▼                                 ▼
 ┌──────────────────────────────────────┐  ┌──────────────────────────────┐
 │       Núcleo Rust Primário           │  │   Orquestrador Python        │
-│     (apps/anki-workflow-mcp)         │  │ (src/anki_workflow_mcp/ - dep)│
+│     (apps/anki-workflow-mcp)         │  │ (src/anki_mcp/ - dep)        │
 │                                      │  │                              │
 │ • cards_compile_drafts               │  │ • 49 ferramentas (catálogo   │
 │ • review_batch_information           │  │   legado completo)           │
@@ -59,7 +59,6 @@ O workspace Cargo organiza o processamento de regras, compilação e avaliação
   - Expõe 7 ferramentas MCP: seis operações em memória (`cards_compile_drafts`, `review_batch_information`, `quality_prepare`, `quality_evaluate`, `batch_patch_draft`, `generation_contract_get`) e a ferramenta de persistência `export_reviewed_files` (implementada em `apps/anki-workflow-mcp/src/export.rs`), com escrita local explícita e anotações de efeito colateral.
   - Subcomandos CLI nativos em Rust:
     - `serve`: inicia o transporte MCP stdio explícito obrigatório.
-    - `validate`: executa validação offline e diagnósticos de qualidade via CLI.
     - `sync-decks`: sincroniza e publica hierarquia de baralhos no Anki.
     - `sync-media`: cataloga e sincroniza mídia física local com a coleção.
   - Binário auxiliar `export-schemas`: binário Rust dedicado para exportar esquemas JSON Schema 2020-12 a partir das structs Rust de domínio e MCP.
@@ -69,12 +68,12 @@ O workspace Cargo organiza o processamento de regras, compilação e avaliação
 
 ## 2. Camada de Persistência e Mídia (Python Legado - Deprecated)
 
-O runtime Python legado em `src/anki_workflow_mcp/` (baseado em FastMCP com catálogo legado de 49 ferramentas) está oficialmente marcado como **deprecated**. Seu entrypoint emite aviso de depreciação em stderr. Ele não é dependência do fluxo novo e permanece exclusivamente para fins de compatibilidade com o histórico de staging, manifesto e `id_ledger.json`. O núcleo Rust cobre nativamente validação, auditoria de qualidade, exportação local transacional e sincronizações via CLI.
+O runtime Python legado em `src/anki_mcp/` (baseado em FastMCP com catálogo legado de 49 ferramentas) está oficialmente marcado como **deprecated**. Seu entrypoint emite aviso de depreciação em stderr. Ele não é dependência do fluxo novo e permanece exclusivamente para fins de compatibilidade com o histórico de staging, manifesto e `id_ledger.json`. O núcleo Rust cobre nativamente validação, auditoria de qualidade, exportação local transacional e sincronizações via CLI.
 
 A estrutura legada preservada inclui:
-- **`src/anki_workflow_mcp/core/`:** Leitura e gravação atômica em disco, locks de arquivo (`filelock`), normalização e sanitização.
-- **`src/anki_workflow_mcp/models/`:** Schemas Pydantic para manifesto, staging de drafts, catálogos e triagem.
-- **`src/anki_workflow_mcp/tools/`:** Operações MCP transacionais legadas:
+- **`src/anki_mcp/core/`:** Leitura e gravação atômica em disco, locks de arquivo (`filelock`), normalização e sanitização.
+- **`src/anki_mcp/models/`:** Schemas Pydantic para manifesto, staging de drafts, catálogos e triagem.
+- **`src/anki_mcp/tools/`:** Operações MCP transacionais legadas:
   - Ciclo de vida do manifesto: `manifesto_init`, `manifesto_state`, `manifesto_plan_set`, `manifesto_commit`, etc.
   - Gerenciamento de staging: gravação em arquivos `.jsonl` e controle de lotes.
   - Gerenciamento de IDs: persistência em `id_ledger.json` e verificação de unicidade.
@@ -102,16 +101,17 @@ O sistema formaliza dois perfis operacionais:
 
 ## 4. Status de Implementação em Relação às ADRs
 
-As Decisões de Arquitetura (ADRs 001 a 006) em `docs/adr/` documentam a visão de longo prazo para um sistema 100% nativo em Rust:
+As Decisões de Arquitetura (ADRs 001 a 007) em `docs/adr/` documentam a visão de longo prazo para um sistema 100% nativo em Rust:
 - **Implementado no estado atual:**
   - Núcleo de computação e validação 100% Rust em memória (ADR-001).
   - Paridade determinística de recibo `compute_receipt_v1` (ADR-004).
   - Separação dos perfis de compatibilidade `legacy_compat` e `strict_v2` (ADR-003).
   - Verificação de recuperações individuais sem teto fixo em `quality_v1` (ADR-003).
+  - Exportação local transacional com ledger JSON, lock cruzado de processos, swap atômico e adoção pós-crash (ADR-007; substitui ADR-005 e ADR-006).
 - **Arquitetura-alvo em roadmap (Não implementada no Rust atual):**
-  - Armazenamento transacional em SQLite (`anki_workflow.db`) com modo WAL e `SingleWriter` dedicado (ADR-005).
+  - Armazenamento transacional em SQLite (`anki_workflow.db`) com modo WAL e `SingleWriter` dedicado (ADR-005, superada por ADR-007). SQLite existe no workspace apenas como espelho de leitura da coleção Anki em `sync-decks`.
   - Persistência estruturada de `ValidationAttestation` com âncora local no SQLite (ADR-004).
-  - Publicação imutável com versionamento relacional (`artifact_versions`) e projeção em disco em duas etapas com Garbage Collection (ADR-006).
+  - Publicação imutável com versionamento relacional (`artifact_versions`) e projeção em disco em duas etapas com Garbage Collection (ADR-006, superada por ADR-007).
   - Manifesto e staging históricos permanecem no Python; a exportação Rust usa ledger local de arquivos, não implementa o backend relacional dessas ADRs.
 
 ## 5. Camadas de `anki-validate`
@@ -125,7 +125,7 @@ O layout físico plano de módulos foi mantido deliberadamente; as camadas são 
 | Segurança e normalização | `html_security` (Ammonia/HTML5), `draft_normalize`, `sanitize`, `draft_compile`, `draft_patch` |
 | Validação e qualidade | `cloze`, `hints`, `qa`, `tables`, `images`, `csv_structure`, `tags`, `crossrefs`, `quality`, `quality_content` |
 
-`NoteDocument` contém `NoteBlock` tipados e proveniência (`NoteSource`). `CompileMode::StrictV2` rejeita combinações conflitantes e HTML legado não autorizado; `LegacyCompat` adapta entradas antigas. `RawCardDraft` continua tolerante para consumidores legados fora da fronteira MCP, enquanto `StrictRawCardDraft` (com `#[serde(deny_unknown_fields)]`) rejeita estritamente chaves desconhecidas na fronteira MCP e exige conformidade com `NoteDocument`. Aliases conhecidos são preservados. Tipos derivados não implementam domínio em JS.
+`NoteDocument` contém `NoteBlock` tipados e proveniência (`NoteSource`). `CompileMode::StrictV2` rejeita combinações conflitantes e HTML legado não autorizado; `LegacyCompat` adapta entradas antigas. O modo é selecionável na fronteira MCP pela propriedade `compile_mode` de `cards_compile_drafts` (`legacy_compat` como padrão, `strict_v2` opt-in), o que torna o contrato estrito alcançável sem alterar o comportamento de clientes existentes: `compile_drafts_with_mode` controla separadamente o rigor estrutural do draft e o modo de compilação das notas, enquanto `compile_drafts` e `compile_drafts_strict` permanecem delegando em `legacy_compat`. Em `strict_v2`, chaves legadas sem conteúdo (`null` ou vazias) não contam como campo legado **quando `notas_adicionais` não traz campos canônicos**: a fronteira MCP poda as chaves materializadas pela normalização do draft antes de compilar, e chamadas diretas a `legacy_adapter::compile_extra_notes` continuam recusando a chave presente. Misturar `blocos`/`fontes` com qualquer chave legada — mesmo `null` — é erro de normalização em ambos os modos. Apenas valores populados de `fisiopatologia`, `raciocinio_clinico`, `armadilhas_diferenciais`, `correlacao_visual`, `tabela`, `texto_livre`, `tabela_notas`, `tabelas_notas` e `figuras_notas` são rejeitados. `RawCardDraft` continua tolerante para consumidores legados fora da fronteira MCP, enquanto `StrictRawCardDraft` (com `#[serde(deny_unknown_fields)]`) rejeita estritamente chaves desconhecidas na fronteira MCP e exige conformidade com `NoteDocument`. Aliases conhecidos são preservados. Tipos derivados não implementam domínio em JS.
 
 `oracle` só é compilado com `--features oracle`; o binário padrão não o expõe. O toolchain de desenvolvimento permanece 1.99.1 e a MSRV declarada permanece 1.89, sem alegar que esta sessão exercitou a MSRV.
 
@@ -135,18 +135,17 @@ A exportação é realizada pela ferramenta MCP `export_reviewed_files` (impleme
 - Requer diretório explícito, slug seguro de batch, declaração obrigatória `verdict == "PASS"` e o `receipt_hash` exato dos CSVs.
 - O recibo é `sha256(b"qa\0" + qa_csv + b"\0cloze\0" + cloze_csv)` hexadecimal sem prefixo; difere de `compute_receipt_v1` e de `snapshot_hash`. Ele detecta alteração de conteúdo pós-revisão, não autentica aprovação clínica.
 - Estrutura dos CSVs e sanitização fail-closed de HTML são revalidadas compulsoriamente antes da escrita.
-- Escrita transacional atômica: utiliza diretório de staging temporário no mesmo filesystem, locks de concorrência, geração de manifesto local `.anki_export_manifest.json` com histórico e hashes, e rollback integral em caso de falha de I/O ou conflito de destino. Idempotência não mascara arquivos alterados.
+- Escrita transacional atômica: utiliza diretório de staging temporário no mesmo filesystem, locks de concorrência, ledger de estado local `.anki-workflow-export-state.json` (`.anki_workflow_export.lock` para o lock cruzado de processos) com histórico e hashes, e rollback integral em caso de falha de I/O ou conflito de destino. Idempotência não mascara arquivos alterados.
 
 Os subcomandos nativos de coleção e manutenção no binário Rust operam exclusivamente via CLI:
 - `sync-media`: recebe catálogo e caminhos locais explícitos, planeja colisões case-insensitive/SHA-256 e opera em dry-run por padrão.
 - `sync-decks`: lê snapshot SQLite sintético nos testes, ordena com `unicase` e publica a hierarquia de baralhos atomicamente.
-- `validate`: validação direta de lotes e regras estruturais e de qualidade via terminal sem necessidade do protocolo MCP.
 Nenhum deles é exposto como ferramenta MCP nem descobre automaticamente o perfil real do usuário.
 
 ## 7. Contratos e Borda Node / TypeScript
 
 Os contratos e a camada de interoperabilidade com TypeScript/Node são estritamente derivados da implementação Rust:
-- **Binário `export-schemas`:** utilitário nativo Rust que gera os contratos e esquemas canônicos JSON Schema 2020-12 em `contracts/v2/schema/*.schema.json` a partir das structs Rust.
+- **Binário `export-schemas`:** utilitário nativo Rust que gera os contratos e esquemas canônicos JSON Schema 2020-12 em `contracts/v2/schemas/*.schema.json` a partir das structs Rust.
 - **Contratos TypeScript:** o gerador `tools/codegen-ts/` produz os tipos estáticos em `contracts/v2/ts/index.d.ts` de forma determinística, sem lógica de domínio em JS.
 - **Harness de testes E2E (`tests/mcp-contract-ts`):** suíte de integração ponta a ponta que valida o binário do servidor Rust via stdio utilizando o cliente oficial `@modelcontextprotocol/sdk` em TypeScript contra as 7 ferramentas MCP.
 - **Launcher npm (`npm/`):** wrapper fino publicado no ecossistema Node/npm que despacha o binário Rust compilado para a plataforma hospedeira sem scripts de pós-instalação nem downloads arbitrários em runtime (pacotes opcionais por plataforma e verificação de integridade via manifesto SHA-256). Override local é uma escolha explícita de confiança do operador.

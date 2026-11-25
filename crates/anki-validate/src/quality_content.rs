@@ -99,22 +99,11 @@ fn normalized_visible(text: &str) -> String {
         .to_lowercase()
 }
 
+/// Minúsculas + diacríticos removidos para comparar rótulos de referência.
+///
+/// Delega para [`crate::text_norm::fold`], a primitiva única de dobra do crate (Onda 2, B24).
 fn fold_accents_lower(text: &str) -> String {
-    text.chars()
-        .flat_map(|c| match c {
-            'á' | 'à' | 'â' | 'ã' | 'ä' | 'Á' | 'À' | 'Â' | 'Ã' | 'Ä' => {
-                vec!['a']
-            }
-            'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => vec!['e'],
-            'í' | 'ì' | 'î' | 'ï' | 'Í' | 'Ì' | 'Î' | 'Ï' => vec!['i'],
-            'ó' | 'ò' | 'ô' | 'õ' | 'ö' | 'Ó' | 'Ò' | 'Ô' | 'Õ' | 'Ö' => {
-                vec!['o']
-            }
-            'ú' | 'ù' | 'û' | 'ü' | 'Ú' | 'Ù' | 'Û' | 'Ü' => vec!['u'],
-            'ç' | 'Ç' => vec!['c'],
-            other => other.to_lowercase().collect(),
-        })
-        .collect()
+    crate::text_norm::fold(text)
 }
 
 fn is_generic_reference(vis_ref: &str) -> bool {
@@ -360,9 +349,24 @@ struct NearDupCandidate {
     tokens: BTreeSet<String>,
 }
 
+/// Conveniência sobre [`review_content_with_review`]: calcula o
+/// `BatchInformationReview` localmente (uma única passada) e delega. Mantido para
+/// não quebrar os chamadores que só têm os dois CSVs.
 #[must_use]
 pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
     let review = crate::review_batch_information(qa_csv, cloze_csv);
+    review_content_with_review(qa_csv, cloze_csv, &review)
+}
+
+/// Mesmas checagens de [`review_content`], mas reaproveitando um
+/// `BatchInformationReview` já calculado pelo chamador. Evita rodar
+/// `review_batch_information` duas vezes no mesmo prepare/evaluate.
+#[must_use]
+pub fn review_content_with_review(
+    qa_csv: &str,
+    cloze_csv: &str,
+    review: &crate::BatchInformationReview,
+) -> Vec<Diagnostic> {
     let mut seen = BTreeMap::new();
     let mut prompts = BTreeMap::new();
     let mut diagnostics = Vec::new();
@@ -370,7 +374,14 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
     let mut qa_rows: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (row, line) in iter_data_lines(qa_csv) {
         let row = row.get();
-        let cols = split_row(line, 7).cols;
+        let split = split_row(line, 7);
+        if !split.structural_ok {
+            // SKIPPED_STRUCTURAL: a linha deslocada (por exemplo `|` cru dentro
+            // do Enunciado) já recebe diagnóstico estrutural em `check_csv`;
+            // ler colunas por índice aqui culparia o campo errado.
+            continue;
+        }
+        let cols = split.cols;
         let prompt = cols.first().map_or("", String::as_str);
         let answer = cols.get(1).map_or("", String::as_str);
         let notes = cols.get(3).map_or("", String::as_str);
@@ -445,7 +456,12 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
     let mut cloze_rows: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     for (row, line) in iter_data_lines(cloze_csv) {
         let row = row.get();
-        let cols = split_row(line, 6).cols;
+        let split = split_row(line, 6);
+        if !split.structural_ok {
+            // SKIPPED_STRUCTURAL, idem ao laço QA acima.
+            continue;
+        }
+        let cols = split.cols;
         let sentence = cols.first().map_or("", String::as_str);
         let notes = cols.get(1).map_or("", String::as_str);
         let images = cols.get(3).map_or("", String::as_str);
@@ -593,6 +609,18 @@ pub fn review_content(qa_csv: &str, cloze_csv: &str) -> Vec<Diagnostic> {
 mod tests {
     use super::*;
     use anki_domain::{CLOZE_HEADER_CANONICAL as CL, QA_HEADER_CANONICAL as QA};
+
+    #[test]
+    fn shifted_rows_produce_no_semantic_diagnostics() {
+        // `|` cru no Enunciado/Sentença desloca as colunas: lidas por índice, a
+        // escolha binária cairia em Resposta (8ª coluna) e as Referências
+        // ficariam vazias. Com o guard estrutural nenhum diagnóstico semântico sai.
+        let qa = format!("{QA}\nPergunta com |[A / B]|Campo|Notas|Imagens||Tag|extra");
+        assert!(review_content(&qa, CL).is_empty());
+
+        let cl = format!("{CL}\nSentença com |[A / B]|Campo|Imagens||Tag|extra");
+        assert!(review_content(QA, &cl).is_empty());
+    }
 
     #[test]
     fn same_prompt_different_targets_requires_interference_review() {

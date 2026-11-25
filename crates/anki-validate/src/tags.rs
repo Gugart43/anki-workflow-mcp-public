@@ -22,22 +22,11 @@ fn depth(tag: &str) -> usize {
 
 /// Normaliza texto PT-BR para minúsculas sem acentos.
 ///
-/// Compartilhado por `qa_clinical` e `interference` (heurísticas Wave 2). Mantém
-/// apenas os diacríticos do português para não alterar radicais clínicos.
+/// Delega para [`crate::text_norm::fold`], a primitiva única de dobra do crate (Onda 2, B24).
+/// Compartilhado por `qa_clinical` e `interference` (heurísticas Wave 2).
 #[must_use]
 pub fn normalize_ptbr(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| match c {
-            'á' | 'à' | 'ã' | 'â' => 'a',
-            'é' | 'ê' => 'e',
-            'í' => 'i',
-            'ó' | 'ô' | 'õ' => 'o',
-            'ú' | 'ü' => 'u',
-            'ç' => 'c',
-            _ => c,
-        })
-        .collect()
+    crate::text_norm::fold(s)
 }
 
 fn attach_location(mut diag: Diagnostic, row: Option<usize>, field: &str) -> Diagnostic {

@@ -108,3 +108,23 @@ def test_pure_restatement_still_warns_and_profile_agrees():
 def test_metadata_still_critical():
     diags = check_notes("ID: 1234 — nota de teste")
     assert any(d.code == "NOTE.METADATA" and d.severity == Severity.CRITICAL for d in diags)
+
+
+def test_metadata_survives_markdown_and_bullet_prefixes():
+    """B26: `**ID:**` e `• ID:` são o mesmo metadado que `ID:` e não podem escapar."""
+    for notes in (
+        "**ID:** 1234 — nota de teste",
+        "__ID:__ 1234 — nota de teste",
+        "• ID: 1234 — nota de teste",
+        "• **ID:** 1234 — nota de teste",
+        "▪ Relevância: alta",
+        "* Âncora: p. 83",
+    ):
+        diags = check_notes(notes)
+        assert any(d.code == "NOTE.METADATA" for d in diags), notes
+
+    # Mensagem histórica preservada: só o rótulo, sem asteriscos nem bullet.
+    diags = check_notes("• **ID:** 1234")
+    metadata = next(d for d in diags if d.code == "NOTE.METADATA")
+    assert metadata.message == "Forbidden metadata header found: 'ID:'"
+    assert metadata.severity == Severity.CRITICAL

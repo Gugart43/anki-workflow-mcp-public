@@ -185,6 +185,12 @@ pub struct QualityReport {
     pub mode: String,
     pub snapshot_hash: String,
     pub content_hash: String,
+    /// Valor aceito pelo argumento `receipt_hash` de
+    /// `export_reviewed_files`: exatamente
+    /// `anki_domain::compute_receipt_v1(qa_csv, cloze_csv).into_inner()`
+    /// (a mesma função que produz `content_hash`, que é mantido por
+    /// compatibilidade do relatório).
+    pub receipt_hash: String,
     pub verdict: String,
     pub clinical_correctness_certified: bool,
     pub export_authorized: bool,
@@ -193,6 +199,10 @@ pub struct QualityReport {
     pub obligation_count: usize,
     pub covered_obligation_count: usize,
     pub diagnostics: Vec<Diagnostic>,
+    /// Canal consultivo: agregado verbatim dos diagnósticos do namespace `NOTE`
+    /// (`review.cards[].diagnostics`), ordenado e deduplicado. NÃO participa do
+    /// cálculo de `verdict` — avisos de nota continuam apenas consultivos.
+    pub notes_diagnostics: Vec<Diagnostic>,
     pub guidance: Vec<String>,
     pub review: BatchInformationReview,
 }
@@ -285,6 +295,140 @@ fn normalize_crlf_only(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
+/// Campos relevantes de um card no CSV de origem, usados para conferir
+/// evidências `scope="notes"` contra o campo `Notas Adicionais` do próprio card.
+#[derive(Debug, Clone)]
+struct CardFieldText {
+    notes: String,
+}
+
+/// Mapeia `(tipo de nota, linha de origem)` para o texto bruto dos campos do card.
+/// Linhas estruturalmente inválidas são ignoradas: elas já produzem diagnóstico
+/// estrutural próprio e não podem fornecer um campo confiável.
+fn collect_card_field_text(
+    qa_csv: &str,
+    cloze_csv: &str,
+) -> BTreeMap<(NoteTypeTag, usize), CardFieldText> {
+    let mut map = BTreeMap::new();
+    for (row, line) in iter_data_lines(qa_csv) {
+        let split = split_row(line, 7);
+        if !split.structural_ok {
+            continue;
+        }
+        map.insert(
+            (NoteTypeTag::Qa, row.get()),
+            CardFieldText {
+                notes: split.cols.get(3).map_or_else(String::new, String::clone),
+            },
+        );
+    }
+    for (row, line) in iter_data_lines(cloze_csv) {
+        let split = split_row(line, 6);
+        if !split.structural_ok {
+            continue;
+        }
+        map.insert(
+            (NoteTypeTag::Cl, row.get()),
+            CardFieldText {
+                notes: split.cols.get(1).map_or_else(String::new, String::clone),
+            },
+        );
+    }
+    map
+}
+
+/// Verifica se `quote` ocorre no campo de texto do card, aceitando tanto o HTML
+/// bruto (CRLF normalizado) quanto o texto visível — notas compiladas carregam
+/// markup legítimo (`<b>`, `<section class="anki-list">`) que não deve punir a citação.
+fn quote_occurs_in_field(field_text: &str, quote: &str) -> bool {
+    let norm_field = normalize_crlf_only(field_text);
+    let norm_quote = normalize_crlf_only(quote);
+    if py_is_blank(&norm_quote) {
+        return false;
+    }
+    if norm_field.contains(&norm_quote) {
+        return true;
+    }
+    let visible_quote = crate::html_text::html_to_visible_text(&norm_quote);
+    if py_is_blank(&visible_quote) {
+        return false;
+    }
+    crate::html_text::html_to_visible_text(&norm_field).contains(&visible_quote)
+}
+
+/// Agregado consultivo completo dos diagnósticos do namespace `NOTE` presentes em
+/// `review.cards[].diagnostics`, preservados verbatim (severidade, owner_skill,
+/// suggestion) e deduplicados. NÃO participa do cálculo de `verdict`: avisos de
+/// nota continuam consultivos (ver `docs/information-quality.md`).
+///
+/// A chave de deduplicação inclui a identidade do cartão (`note_type`,
+/// `source_row`): `source_row` é único apenas dentro de cada CSV, de modo que um
+/// cartão QA e um Cloze de mesma linha são cartões distintos e não podem colapsar
+/// um no outro. O mesmo diagnóstico replicado por vários índices Cloze do mesmo
+/// cartão continua colapsado.
+fn collect_notes_diagnostics(review: &BatchInformationReview) -> Vec<Diagnostic> {
+    let mut seen: BTreeSet<(&'static str, usize, String, String, Option<String>)> = BTreeSet::new();
+    let mut collected: Vec<(&'static str, usize, Diagnostic)> = Vec::new();
+    for card in &review.cards {
+        for d in &card.diagnostics {
+            if d.code.namespace() != "NOTE" {
+                continue;
+            }
+            let key = (
+                card.note_type,
+                card.source_row,
+                d.code.as_str().to_owned(),
+                d.message.clone(),
+                d.field.clone(),
+            );
+            if !seen.insert(key) {
+                continue;
+            }
+            let mut diag = d.clone();
+            if diag.row.is_none() {
+                diag = diag.with_row(card.source_row);
+            }
+            collected.push((card.note_type, card.source_row, diag));
+        }
+    }
+    collected.sort_by(|(a_type, a_row, a), (b_type, b_row, b)| {
+        (
+            a_type,
+            a_row,
+            a.code.as_str(),
+            a.message.as_str(),
+            a.field.as_deref(),
+        )
+            .cmp(&(
+                b_type,
+                b_row,
+                b.code.as_str(),
+                b.message.as_str(),
+                b.field.as_deref(),
+            ))
+    });
+    collected.into_iter().map(|(_, _, diag)| diag).collect()
+}
+
+/// Normalização de CSV exclusiva do `snapshot_hash`: além de CRLF -> LF
+/// (`canonical_csv_text`), remove espaço/tab à direita de cada linha e newlines
+/// ou linhas em branco finais. Sem isso, ruído puramente de formatação
+/// (newline final, linha em branco extra, espaço à direita) mudava o
+/// `snapshot_hash` e invalidava reviews legítimas com `STALE_REVIEW_SNAPSHOT`.
+///
+/// `anki_domain::canonical_csv_text` e `anki_domain::compute_receipt_v1` NÃO
+/// são alterados: eles são contrato do receipt já gravado (`content_hash` /
+/// `receipt_hash` distinguem, de propósito, o byte exato revisado).
+fn canonical_csv_for_snapshot(text: &str) -> String {
+    canonical_csv_text(text)
+        .split('\n')
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_owned()
+}
+
 fn compute_snapshot_hash(req: &QualityRequestRef<'_>) -> String {
     let mut canonical_sources = req.sources.to_vec();
     canonical_sources.sort();
@@ -314,8 +458,8 @@ fn compute_snapshot_hash(req: &QualityRequestRef<'_>) -> String {
 
     let payload = SnapshotPayload {
         schema_version: QUALITY_SCHEMA_VERSION,
-        qa_csv: canonical_csv_text(req.qa_csv),
-        cloze_csv: canonical_csv_text(req.cloze_csv),
+        qa_csv: canonical_csv_for_snapshot(req.qa_csv),
+        cloze_csv: canonical_csv_for_snapshot(req.cloze_csv),
         sources: &canonical_sources,
         obligations: &canonical_obligations,
         bindings: &canonical_bindings,
@@ -327,20 +471,21 @@ fn compute_snapshot_hash(req: &QualityRequestRef<'_>) -> String {
 
 fn has_unclosed_cloze_marker(sentence: &str) -> bool {
     let spans = find_cloze_spans(sentence);
-    let chars: Vec<char> = sentence.chars().collect();
-    let n = chars.len();
-    let mut i = 0usize;
-
-    while i + 3 < n {
-        if chars[i] == '{'
-            && chars[i + 1] == '{'
-            && chars[i + 2] == 'c'
-            && chars[i + 3].is_ascii_digit()
-            && !spans.iter().any(|s| i >= s.start && i < s.end)
-        {
+    // Percorre offsets de BYTE (as mesmas unidades de `ClozeSpan::start/end`) para não
+    // confundir índices de `char` com offsets: em português, um acento antes do marcador
+    // deslocava a comparação e marcava sentenças válidas como malformadas.
+    for (offset, _) in sentence.char_indices() {
+        let Some(rest) = sentence.get(offset..) else {
+            continue;
+        };
+        if !rest.starts_with("{{c") {
+            continue;
+        }
+        // `rest` começa com ASCII, então `rest[3..]` está em fronteira de caractere.
+        let has_index = rest[3..].chars().next().is_some_and(|c| c.is_ascii_digit());
+        if has_index && !spans.iter().any(|s| offset >= s.start && offset < s.end) {
             return true;
         }
-        i += 1;
     }
     false
 }
@@ -357,6 +502,7 @@ fn check_batch_structural_and_card_criticals(
     qa_csv: &str,
     cloze_csv: &str,
     review: &BatchInformationReview,
+    notes_diagnostics: &[Diagnostic],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BTreeSet<RetrievalKey> {
     for d in &review.diagnostics {
@@ -364,28 +510,63 @@ fn check_batch_structural_and_card_criticals(
             let mut qd = diag_critical(
                 "QUALITY.BATCH_CRITICAL",
                 format!("Critical batch diagnostic [{}]: {}", d.code, d.message),
-            );
+            )
+            .with_cause_code(d.code.as_str());
             if let Some(row) = d.row {
                 qd = qd.with_row(row);
             }
             if let Some(field) = &d.field {
                 qd = qd.with_field(field.clone());
             }
+            if let Some(suggestion) = &d.suggestion {
+                qd = qd.with_suggestion(suggestion.clone());
+            }
             diagnostics.push(qd);
         }
+    }
+
+    // Criticals de nota são promovidos UMA vez a partir do agregado já
+    // deduplicado (uma nota Cloze com N índices não gera N cópias).
+    for d in notes_diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Critical)
+    {
+        let mut qd = diag_critical(
+            "QUALITY.CARD_CRITICAL",
+            format!("Critical card diagnostic [{}]: {}", d.code, d.message),
+        )
+        .with_cause_code(d.code.as_str());
+        if let Some(row) = d.row {
+            qd = qd.with_row(row);
+        }
+        if let Some(field) = &d.field {
+            qd = qd.with_field(field.clone());
+        }
+        if let Some(suggestion) = &d.suggestion {
+            qd = qd.with_suggestion(suggestion.clone());
+        }
+        diagnostics.push(qd);
     }
 
     let mut expected_retrievals = BTreeSet::new();
     for card in &review.cards {
         for d in &card.diagnostics {
+            // NOTE.* já foi promovido acima via notes_diagnostics (uma vez só).
+            if d.code.namespace() == "NOTE" {
+                continue;
+            }
             if d.severity == Severity::Critical {
                 let mut qd = diag_critical(
                     "QUALITY.CARD_CRITICAL",
                     format!("Critical card diagnostic [{}]: {}", d.code, d.message),
                 )
-                .with_row(card.source_row);
+                .with_row(card.source_row)
+                .with_cause_code(d.code.as_str());
                 if let Some(field) = &d.field {
                     qd = qd.with_field(field.clone());
+                }
+                if let Some(suggestion) = &d.suggestion {
+                    qd = qd.with_suggestion(suggestion.clone());
                 }
                 diagnostics.push(qd);
             }
@@ -558,19 +739,18 @@ fn validate_bindings<'a>(
     expected_retrievals: &BTreeSet<RetrievalKey>,
     source_map: &BTreeMap<&'a str, &'a QualitySource>,
     obligation_map: &BTreeMap<&'a str, &'a QualityObligation>,
+    card_field_text: &BTreeMap<(NoteTypeTag, usize), CardFieldText>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> BTreeSet<&'a str> {
     let mut seen_bindings = BTreeSet::new();
     let mut covered_obligations = BTreeSet::new();
 
     for (idx, binding) in bindings.iter().enumerate() {
-        let addr_label = match parse_retrieval_key(
-            &binding.note_type,
-            binding.source_row,
-            binding.cloze_index,
-        ) {
+        let parsed_key =
+            parse_retrieval_key(&binding.note_type, binding.source_row, binding.cloze_index);
+        let addr_label = match &parsed_key {
             Ok(key) => {
-                if !seen_bindings.insert(key) {
+                if !seen_bindings.insert(*key) {
                     diagnostics.push(
                         diag_critical(
                             "QUALITY.DUPLICATE_BINDING",
@@ -578,7 +758,7 @@ fn validate_bindings<'a>(
                         )
                         .with_row(binding.source_row),
                     );
-                } else if !expected_retrievals.contains(&key) {
+                } else if !expected_retrievals.contains(key) {
                     diagnostics.push(
                         diag_critical(
                             "QUALITY.ORPHAN_BINDING",
@@ -725,6 +905,31 @@ fn validate_bindings<'a>(
                 has_valid_retrieval_evidence = true;
                 retrieval_evidence_sources.insert(src.id.as_str());
             }
+
+            // Evidência scope="notes" afirma algo sobre o campo 'Notas Adicionais'
+            // do próprio card: até aqui o quote só era conferido contra a fonte.
+            //
+            // Só é avaliada quando o campo é de fato localizável no CSV: uma linha
+            // estruturalmente inválida ou um binding órfão já recebe o diagnóstico
+            // estrutural próprio, e afirmar "quote ausente das notas" aí seria
+            // factualmente falso (não há campo para conferir).
+            if !quote_blank
+                && ev.scope == "notes"
+                && let Ok(key) = &parsed_key
+                && let Some(fields) = card_field_text.get(&(key.note_type, key.source_row))
+                && !quote_occurs_in_field(&fields.notes, &ev.quote)
+            {
+                diagnostics.push(
+                    diag_critical(
+                        "QUALITY.NOTES_EVIDENCE_QUOTE_NOT_FOUND",
+                        format!(
+                            "Binding {addr_label} evidence[{ev_idx}] quote does not occur in the card's 'Notas Adicionais' field"
+                        ),
+                    )
+                    .with_row(binding.source_row)
+                    .with_field("Notas Adicionais"),
+                );
+            }
         }
 
         if !binding.evidence.is_empty() && !has_valid_retrieval_evidence {
@@ -794,37 +999,21 @@ fn validate_reviews(
     snapshot_hash: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> usize {
-    let mut seen_reviews = BTreeSet::new();
-    let mut fulfilled_reviews = BTreeSet::new();
-
+    // Duas passadas, independentes da ordem da lista: `reviewed_count` e
+    // `MISSING_REVIEW` não podem depender da posição das reviews. Antes,
+    // `seen_reviews.insert` acontecia antes de validar cada review, de modo que
+    // `[approve, revise]` dava `reviewed_count = 1` e `[revise, approve]` dava 0
+    // para exatamente o mesmo conjunto de reviews.
+    //
+    // Passada 1: agrupa por `RetrievalKey`, com UM único DUPLICATE_REVIEW por
+    // chave repetida e UM único ORPHAN_REVIEW por chave órfã.
+    let mut parsed: Vec<(Option<RetrievalKey>, String)> = Vec::with_capacity(reviews.len());
+    let mut grouped_reviews: BTreeMap<RetrievalKey, Vec<usize>> = BTreeMap::new();
     for (idx, rev) in reviews.iter().enumerate() {
-        let mut address_ok = false;
-        let parsed_key = parse_retrieval_key(&rev.note_type, rev.source_row, rev.cloze_index);
-        let addr_label = match &parsed_key {
+        match parse_retrieval_key(&rev.note_type, rev.source_row, rev.cloze_index) {
             Ok(key) => {
-                if !seen_reviews.insert(*key) {
-                    diagnostics.push(
-                        diag_critical(
-                            "QUALITY.DUPLICATE_REVIEW",
-                            format!("Duplicate editorial review for retrieval {}", key.label()),
-                        )
-                        .with_row(rev.source_row),
-                    );
-                } else if !expected_retrievals.contains(key) {
-                    diagnostics.push(
-                        diag_critical(
-                            "QUALITY.ORPHAN_REVIEW",
-                            format!(
-                                "Editorial review {} does not match any retrieval in CSV inputs",
-                                key.label()
-                            ),
-                        )
-                        .with_row(rev.source_row),
-                    );
-                } else {
-                    address_ok = true;
-                }
-                key.label()
+                grouped_reviews.entry(key).or_default().push(idx);
+                parsed.push((Some(key), key.label()));
             }
             Err(reason) => {
                 diagnostics.push(
@@ -834,9 +1023,48 @@ fn validate_reviews(
                     )
                     .with_row(rev.source_row),
                 );
-                format!("review[{idx}]")
+                parsed.push((None, format!("review[{idx}]")));
             }
-        };
+        }
+    }
+
+    let mut addressable: BTreeSet<RetrievalKey> = BTreeSet::new();
+    for (key, indices) in &grouped_reviews {
+        if indices.len() > 1 {
+            diagnostics.push(
+                diag_critical(
+                    "QUALITY.DUPLICATE_REVIEW",
+                    format!(
+                        "Duplicate editorial review for retrieval {} ({} reviews share the same address)",
+                        key.label(),
+                        indices.len()
+                    ),
+                )
+                .with_row(reviews[indices[0]].source_row),
+            );
+        }
+        if expected_retrievals.contains(key) {
+            addressable.insert(*key);
+        } else {
+            diagnostics.push(
+                diag_critical(
+                    "QUALITY.ORPHAN_REVIEW",
+                    format!(
+                        "Editorial review {} does not match any retrieval in CSV inputs",
+                        key.label()
+                    ),
+                )
+                .with_row(reviews[indices[0]].source_row),
+            );
+        }
+    }
+
+    // Passada 2: julga cada review individualmente (diagnósticos por review) e
+    // marca a chave como cumprida se QUALQUER review dela for válida.
+    let mut fulfilled_reviews: BTreeSet<RetrievalKey> = BTreeSet::new();
+
+    for (rev, (parsed_key, addr_label)) in reviews.iter().zip(&parsed) {
+        let address_ok = parsed_key.is_some_and(|key| addressable.contains(&key));
 
         let snapshot_ok = rev.snapshot_hash == snapshot_hash;
         if !snapshot_ok {
@@ -921,14 +1149,14 @@ fn validate_reviews(
             && rationale_ok
             && verdict_ok
             && dims_ok
-            && let Ok(key) = parsed_key
+            && let Some(key) = parsed_key
         {
-            fulfilled_reviews.insert(key);
+            fulfilled_reviews.insert(*key);
         }
     }
 
     for key in expected_retrievals {
-        if !seen_reviews.contains(key) {
+        if !grouped_reviews.contains_key(key) {
             diagnostics.push(
                 diag_warn(
                     "QUALITY.MISSING_REVIEW",
@@ -944,9 +1172,10 @@ fn validate_reviews(
 
 fn build_guidance(mode: &str, quality_mode: QualityMode) -> Vec<String> {
     let mut guidance = vec![
-        "Excerpt matching verifies literal substring inclusion in caller-supplied QualitySource.text only; it does not prove semantic entailment or clinical correctness.".to_owned(),
+        "Excerpt matching verifies literal substring inclusion only: quotes are compared against caller-supplied QualitySource.text for every scope, and evidence with scope='notes' is additionally required to occur in the card's own 'Notas Adicionais' field (raw HTML or visible text). It does not prove semantic entailment or clinical correctness.".to_owned(),
         "QualityReview records are self-reported editorial attestations bound to snapshot_hash, not trusted identities or server-issued export authorizations (clinical_correctness_certified and export_authorized remain false).".to_owned(),
         "Advisory length warnings (e.g., NOTE.LENGTH_WARN, CARD.TOO_LONG_*) remain non-blocking review signals in report.review.".to_owned(),
+        "notes_diagnostics is the consultative aggregate of NOTES-field diagnostics (namespace NOTE) copied from review.cards[], deduplicated by card identity and diagnostic content. Note-level WARN diagnostics stay consultative: they never enter report.diagnostics and never change verdict. Note-level CRITICAL diagnostics do block, exactly as before: each one is promoted to report.diagnostics as QUALITY.CARD_CRITICAL, with cause_code preserving the original NOTE.* code and the original suggestion carried over.".to_owned(),
     ];
     if quality_mode == QualityMode::Quick {
         guidance.push(
@@ -972,10 +1201,24 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
     let content_hash = compute_receipt_v1(req.qa_csv, req.cloze_csv).into_inner();
     let snapshot_hash = compute_snapshot_hash(req);
     let review = review_batch_information(req.qa_csv, req.cloze_csv);
+    let notes_diagnostics = collect_notes_diagnostics(&review);
+    let card_field_text = collect_card_field_text(req.qa_csv, req.cloze_csv);
     let mut diagnostics = Vec::new();
     for (csv, columns) in [(req.qa_csv, 7), (req.cloze_csv, 6)] {
         for (row, line) in iter_data_lines(csv) {
             for field in split_row(line, columns).cols {
+                // Limites determinísticos de campo têm diagnóstico PRÓPRIO: antes o código era
+                // descartado e um campo legítimo de 17.007 bytes saía como "unsafe HTML".
+                if let Some(code) = crate::html_security::html_field_limit_violation(&field) {
+                    diagnostics.push(
+                        diag_critical(
+                            code,
+                            crate::html_security::html_field_limit_message(code, &field),
+                        )
+                        .with_row(row),
+                    );
+                    continue;
+                }
                 if crate::html_security::has_unsafe_html(&field) {
                     diagnostics.push(
                         diag_critical(
@@ -993,6 +1236,7 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         req.qa_csv,
         req.cloze_csv,
         &review,
+        &notes_diagnostics,
         &mut diagnostics,
     );
 
@@ -1004,12 +1248,26 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         ));
     }
 
+    // Fail-closed: `quick` só faz checagens estruturais/HTML e NÃO avalia reviews.
+    // Aceitar `mode=quick` em uma chamada de avaliação devolvia PASS com
+    // `reviewed_count = 0` — um passe livre silencioso sobre lote sem revisão
+    // editorial. O lote vira FAIL apontando explicitamente o que ficou de fora.
+    if evaluate_reviews && req.mode == QualityMode::Quick {
+        diagnostics.push(diag_critical(
+            "QUALITY.QUICK_SKIPS_REVIEWS",
+            "mode='quick' does not validate editorial reviews (reviewed_count is always 0): it cannot certify evaluated reviews or export readiness. Re-run evaluate_quality with mode='strict' to validate the QualityReview list against this snapshot_hash.",
+        ));
+    }
+
     let (obligation_count, covered_obligation_count, reviewed_count) = match req.mode {
         QualityMode::Quick => (0, 0, 0),
         QualityMode::Strict => {
-            diagnostics.extend(crate::quality_content::review_content(
+            // Uma única passada de `review_batch_information` (calculada acima) é
+            // reaproveitada aqui; antes o lote era reanalisado do zero.
+            diagnostics.extend(crate::quality_content::review_content_with_review(
                 req.qa_csv,
                 req.cloze_csv,
+                &review,
             ));
 
             let source_map = validate_sources(req.sources, &mut diagnostics);
@@ -1020,6 +1278,7 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
                 &expected_retrievals,
                 &source_map,
                 &obligation_map,
+                &card_field_text,
                 &mut diagnostics,
             );
 
@@ -1053,7 +1312,10 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         schema_version: QUALITY_SCHEMA_VERSION.to_owned(),
         mode: mode.to_owned(),
         snapshot_hash,
-        content_hash,
+        content_hash: content_hash.clone(),
+        // `receipt_hash` é o mesmo digest de `content_hash`, exposto sob o nome
+        // aceito por `export_reviewed_files.receipt_hash`.
+        receipt_hash: content_hash,
         verdict: verdict.to_owned(),
         clinical_correctness_certified: false,
         export_authorized: false,
@@ -1062,6 +1324,7 @@ fn run_quality(req: &QualityRequestRef<'_>) -> QualityReport {
         obligation_count,
         covered_obligation_count,
         diagnostics,
+        notes_diagnostics,
         guidance: build_guidance(mode, req.mode),
         review,
     }
@@ -1118,6 +1381,25 @@ pub fn evaluate_quality(input: &QualityInput) -> QualityReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unclosed_cloze_marker_uses_byte_offsets_not_char_indices() {
+        // Regressão: índices de `char` comparados com offsets de byte marcavam como
+        // malformada qualquer sentença acentuada que precedesse o marcador.
+        assert!(!has_unclosed_cloze_marker(
+            "O tratamento é {{c1::aspirina}} na fase aguda."
+        ));
+        assert!(!has_unclosed_cloze_marker(
+            "AÇÕES: {{c1::dupla antiagregação}} reduz eventos."
+        ));
+        assert!(!has_unclosed_cloze_marker("ação {{c1::x}} ação {{c2::y}}"));
+        // Marcadores realmente não fechados continuam detectados.
+        assert!(has_unclosed_cloze_marker("O tratamento é {{c1::aspirina"));
+        assert!(has_unclosed_cloze_marker("ção {{c1"));
+        assert!(!has_unclosed_cloze_marker(
+            "marcador bem formado {{c12::x}}"
+        ));
+    }
 
     #[test]
     fn prepare_quality_input_matches_prepare_quality_snapshot() {
@@ -1434,5 +1716,44 @@ mod tests {
         let schema = schemars::schema_for!(QualityReport);
         let val = serde_json::to_value(&schema).unwrap();
         assert!(val.is_object());
+        assert!(
+            val["properties"]["notes_diagnostics"].is_object(),
+            "notes_diagnostics deve entrar no schema do relatório"
+        );
+        assert!(
+            val["$defs"]["Diagnostic"]["properties"]["cause_code"].is_object(),
+            "cause_code deve entrar no schema de Diagnostic"
+        );
+    }
+
+    #[test]
+    fn quote_occurs_in_field_accepts_raw_html_visible_text_and_blank() {
+        // Positivo: match literal no HTML cru.
+        assert!(quote_occurs_in_field(
+            "<b>Marcador Alfa</b> prevalece.",
+            "<b>Marcador Alfa</b>"
+        ));
+        // Positivo: só o texto visível casa (quote atravessa a tag).
+        assert!(quote_occurs_in_field(
+            "<b>Marcador Alfa</b> prevalece.",
+            "Marcador Alfa prevalece"
+        ));
+        // Positivo: CRLF no quote contra LF no campo.
+        assert!(quote_occurs_in_field(
+            "Linha um\nLinha dois",
+            "Linha um\r\nLinha dois"
+        ));
+        // Positivo: entidades decodificadas no texto visível.
+        assert!(quote_occurs_in_field("Alfa &amp; Beta", "Alfa & Beta"));
+        // Negativo: quote ausente do campo.
+        assert!(!quote_occurs_in_field(
+            "Explicação clínica sintética.",
+            "Marcador Alfa"
+        ));
+        // Negativo: campo vazio.
+        assert!(!quote_occurs_in_field("", "Marcador Alfa"));
+        // Negativo: quote em branco nunca é evidência válida do campo.
+        assert!(!quote_occurs_in_field("Marcador Alfa", "   "));
+        assert!(!quote_occurs_in_field("Marcador Alfa", ""));
     }
 }

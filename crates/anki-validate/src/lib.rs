@@ -12,7 +12,7 @@ pub mod draft_normalize;
 pub mod draft_patch;
 pub mod evidence_matcher;
 pub mod hints;
-mod html_security;
+pub mod html_security;
 pub mod html_text;
 pub mod id_leak;
 pub mod image_alias;
@@ -35,6 +35,7 @@ pub mod study_field;
 pub mod table_render;
 pub mod tables;
 pub mod tags;
+pub mod text_norm;
 pub mod validated_flow;
 pub mod vocab;
 
@@ -46,7 +47,7 @@ pub use cloze_renumber::renumber_cloze;
 pub use crossrefs::check_crossrefs;
 pub use csv_structure::{check_bom, check_csv};
 pub use domain_profile::{DomainProfile, DomainProfileError};
-pub use draft_compile::{compile_drafts, compile_drafts_strict};
+pub use draft_compile::{compile_drafts, compile_drafts_strict, compile_drafts_with_mode};
 pub use draft_normalize::{
     CardTipo, RawCardDraft, StrictRawCardDraft, normalize_draft, normalize_draft_strict,
 };

@@ -23,6 +23,8 @@ pub struct CliArgs {
     pub collection: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub root: String,
+    /// Remove entries that no longer exist in the live collection (`--prune`).
+    pub prune: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,7 @@ pub fn parse_args(args: &[String]) -> Result<CliArgs, (u8, String)> {
     let mut collection = None;
     let mut output = None;
     let mut root = DEFAULT_ROOT.to_string();
+    let mut prune = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -62,8 +65,11 @@ pub fn parse_args(args: &[String]) -> Result<CliArgs, (u8, String)> {
         if arg == "-h" || arg == "--help" {
             return Err((
                 0,
-                "Usage: anki-workflow-mcp sync-decks [--collection <path>] [--output <path>] [--root <name>]".to_string(),
+                "Usage: anki-workflow-mcp sync-decks [--collection <path>] [--output <path>] [--root <name>] [--prune]".to_string(),
             ));
+        } else if arg == "--prune" {
+            prune = true;
+            i += 1;
         } else if arg == "--collection" {
             i += 1;
             if i >= args.len() {
@@ -98,6 +104,7 @@ pub fn parse_args(args: &[String]) -> Result<CliArgs, (u8, String)> {
         collection,
         output,
         root,
+        prune,
     })
 }
 
@@ -478,12 +485,46 @@ pub fn query_all_decks(conn: &Connection) -> Result<Vec<(i64, String)>, (u8, Str
     ))
 }
 
-/// Filter decks matching `root_deck` and merge with existing `deck_hierarchy.json` if present.
+/// Decks that exist in the previously persisted hierarchy but not in the live collection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StaleDecks {
+    /// Names detected as stale (present in `deck_hierarchy.json`, absent from SQLite).
+    pub detected: Vec<String>,
+    /// Subset actually removed from the persisted file (requires `--prune`).
+    pub removed: Vec<String>,
+}
+
+/// Builds `DeckDetail` from a previously persisted JSON object, keeping unknown keys as metadata.
+fn deck_detail_from_value(name: &str, val: &Value) -> DeckDetail {
+    let depth = val
+        .get("depth")
+        .and_then(Value::as_u64)
+        .map(|d| d as usize)
+        .unwrap_or_else(|| name.matches("::").count());
+    let id = val.get("id").and_then(Value::as_i64);
+    let mut extra = BTreeMap::new();
+    if let Some(obj) = val.as_object() {
+        for (k, v) in obj {
+            if k != "id" && k != "depth" {
+                extra.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    DeckDetail { id, depth, extra }
+}
+
+/// Derives the hierarchy from the live collection, using any existing `deck_hierarchy.json`
+/// only as a metadata source keyed by deck name.
+///
+/// `decks` and `total_subdecks` always come from SQLite, so decks deleted in Anki disappear.
+/// Stale entries (present in the file, absent from SQLite) are reported in [`StaleDecks`];
+/// they stay in `deck_details` as metadata-only entries unless `prune` is set.
 pub fn filter_and_merge_hierarchy(
     raw_decks: &[(i64, String)],
     root_deck: &str,
     output_path: &Path,
-) -> Result<HierarchyData, (u8, String)> {
+    prune: bool,
+) -> Result<(HierarchyData, StaleDecks), (u8, String)> {
     let norm_root = normalize_name(root_deck);
 
     let mut subdecks: Vec<SubdeckEntry> = Vec::new();
@@ -549,33 +590,35 @@ pub fn filter_and_merge_hierarchy(
         }
     }
 
-    let mut all_deck_names = existing_decks;
-    for d in &subdecks {
-        all_deck_names.insert(d.name.clone());
+    // The live collection is the only source of `decks`. The persisted file contributes
+    // metadata by name and identifies stale entries (deleted in Anki).
+    let db_names: BTreeSet<String> = subdecks.iter().map(|d| d.name.clone()).collect();
+
+    let mut stale_detected: Vec<String> = Vec::new();
+    for name in existing_decks
+        .iter()
+        .chain(existing_details.keys())
+        .filter(|name| !db_names.contains(*name))
+    {
+        if !stale_detected.contains(name) {
+            stale_detected.push(name.clone());
+        }
     }
-    let mut deck_names: Vec<String> = all_deck_names.into_iter().collect();
+    stale_detected.sort_by(|a, b| pt_br_unicase_cmp(a, b));
+
+    let mut deck_names: Vec<String> = db_names.iter().cloned().collect();
     deck_names.sort_by(|a, b| pt_br_unicase_cmp(a, b));
 
     let mut final_details: BTreeMap<String, DeckDetail> = BTreeMap::new();
 
+    // Metadata preserved by name only for decks that still exist in the collection.
     for (name, val) in &existing_details {
-        let depth = val
-            .get("depth")
-            .and_then(|v| v.as_u64())
-            .map(|d| d as usize)
-            .unwrap_or_else(|| name.matches("::").count());
-        let id = val.get("id").and_then(|v| v.as_i64());
-        let mut extra = BTreeMap::new();
-        if let Some(obj) = val.as_object() {
-            for (k, v) in obj {
-                if k != "id" && k != "depth" {
-                    extra.insert(k.clone(), v.clone());
-                }
-            }
+        if db_names.contains(name) {
+            final_details.insert(name.clone(), deck_detail_from_value(name, val));
         }
-        final_details.insert(name.clone(), DeckDetail { id, depth, extra });
     }
 
+    // SQLite is authoritative for `id` and `depth`.
     for d in &subdecks {
         if let Some(existing) = final_details.get_mut(&d.name) {
             existing.id = Some(d.id);
@@ -592,25 +635,41 @@ pub fn filter_and_merge_hierarchy(
         }
     }
 
-    for name in &deck_names {
-        final_details
-            .entry(name.clone())
-            .or_insert_with(|| DeckDetail {
-                id: None,
-                depth: name.matches("::").count(),
-                extra: BTreeMap::new(),
-            });
+    let mut stale = StaleDecks {
+        detected: stale_detected.clone(),
+        removed: Vec::new(),
+    };
+
+    if prune {
+        stale.removed = stale_detected;
+    } else {
+        // Default (no `--prune`): stale decks keep their metadata but are never listed in
+        // `decks` nor counted in `total_subdecks`.
+        for name in &stale_detected {
+            let detail = match existing_details.get(name) {
+                Some(val) => deck_detail_from_value(name, val),
+                None => DeckDetail {
+                    id: None,
+                    depth: name.matches("::").count(),
+                    extra: BTreeMap::new(),
+                },
+            };
+            final_details.insert(name.clone(), detail);
+        }
     }
 
     let timestamp = iso_8601_now();
 
-    Ok(HierarchyData {
-        root_deck: norm_root,
-        last_synced: timestamp,
-        total_subdecks: deck_names.len(),
-        decks: deck_names,
-        deck_details: final_details,
-    })
+    Ok((
+        HierarchyData {
+            root_deck: norm_root,
+            last_synced: timestamp,
+            total_subdecks: deck_names.len(),
+            decks: deck_names,
+            deck_details: final_details,
+        },
+        stale,
+    ))
 }
 
 /// Persist hierarchy data atomically to disk using `NamedTempFile` and `persist`.
@@ -722,7 +781,8 @@ pub fn run(args: &[String]) -> Result<serde_json::Value, (u8, String)> {
 
     let (_temp_dir, conn) = snapshot_and_open_collection(&col_path)?;
     let raw_decks = query_all_decks(&conn)?;
-    let hierarchy = filter_and_merge_hierarchy(&raw_decks, &parsed.root, &output_path)?;
+    let (hierarchy, stale) =
+        filter_and_merge_hierarchy(&raw_decks, &parsed.root, &output_path, parsed.prune)?;
     persist_hierarchy_atomic(&hierarchy, &output_path)?;
 
     Ok(serde_json::json!({
@@ -731,6 +791,9 @@ pub fn run(args: &[String]) -> Result<serde_json::Value, (u8, String)> {
         "total_subdecks": hierarchy.total_subdecks,
         "last_synced": hierarchy.last_synced,
         "storage_path": output_path.display().to_string(),
+        "pruned": parsed.prune,
+        "stale_removed": stale.removed.len(),
+        "stale_decks": stale.detected,
         "decks": hierarchy.decks,
         "deck_details": hierarchy.deck_details,
     }))
@@ -765,6 +828,7 @@ mod tests {
         assert_eq!(parsed.collection, None);
         assert_eq!(parsed.output, None);
         assert_eq!(parsed.root, DEFAULT_ROOT);
+        assert!(!parsed.prune, "--prune must default to off");
     }
 
     #[test]
@@ -775,11 +839,13 @@ mod tests {
             "--output=/path/to/out.json".to_string(),
             "--root".to_string(),
             "CustomRoot".to_string(),
+            "--prune".to_string(),
         ];
         let parsed = parse_args(&args).expect("parse custom");
         assert_eq!(parsed.collection, Some(PathBuf::from("/path/to/col.anki2")));
         assert_eq!(parsed.output, Some(PathBuf::from("/path/to/out.json")));
         assert_eq!(parsed.root, "CustomRoot");
+        assert!(parsed.prune);
     }
 
     #[test]
@@ -1101,7 +1167,26 @@ mod tests {
         ];
 
         let result = run(&args).expect("run merge");
-        assert_eq!(result["total_subdecks"], 3);
+        // `decks` now comes only from the live collection: the manual entry is no longer a deck.
+        assert_eq!(result["total_subdecks"], 2);
+        let decks: Vec<&str> = result["decks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            decks,
+            vec!["02_MEDICINA_AnkiMBR", "02_MEDICINA_AnkiMBR::Oftalmo"]
+        );
+
+        // Without `--prune`, stale metadata is retained (metadata only) and reported.
+        assert_eq!(result["pruned"], false);
+        assert_eq!(result["stale_removed"], 0);
+        assert_eq!(
+            result["stale_decks"],
+            serde_json::json!(["02_MEDICINA_AnkiMBR::ManualExtra"])
+        );
 
         let details = &result["deck_details"];
         assert_eq!(
@@ -1113,6 +1198,157 @@ mod tests {
             "2026-01-01T00:00:00.000Z"
         );
         assert_eq!(details["02_MEDICINA_AnkiMBR::Oftalmo"]["id"], 2);
+    }
+
+    #[test]
+    fn test_prune_removes_decks_deleted_in_anki() {
+        let td = tempfile::tempdir().unwrap();
+        let col_path = td.path().join("collection.anki2");
+        let out_path = td.path().join("deck_hierarchy.json");
+
+        let conn = Connection::open(&col_path).unwrap();
+        conn.execute(
+            "CREATE TABLE decks (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute("INSERT INTO decks VALUES (1, '02_MEDICINA_AnkiMBR')", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO decks VALUES (2, '02_MEDICINA_AnkiMBR::Oftalmo')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Previous hierarchy still lists a deck that Anki already removed.
+        let initial_json = serde_json::json!({
+            "root_deck": "02_MEDICINA_AnkiMBR",
+            "last_synced": "2026-01-01T00:00:00.000Z",
+            "total_subdecks": 3,
+            "decks": [
+                "02_MEDICINA_AnkiMBR",
+                "02_MEDICINA_AnkiMBR::ManualExtra",
+                "02_MEDICINA_AnkiMBR::Oftalmo"
+            ],
+            "deck_details": {
+                "02_MEDICINA_AnkiMBR": { "depth": 0, "id": 1 },
+                "02_MEDICINA_AnkiMBR::ManualExtra": {
+                    "depth": 1,
+                    "manually_added": true
+                },
+                "02_MEDICINA_AnkiMBR::Oftalmo": { "depth": 1, "id": 2 }
+            }
+        });
+        fs::write(
+            &out_path,
+            serde_json::to_string_pretty(&initial_json).unwrap(),
+        )
+        .unwrap();
+
+        let args = vec![
+            "--collection".to_string(),
+            col_path.to_string_lossy().to_string(),
+            "--output".to_string(),
+            out_path.to_string_lossy().to_string(),
+            "--prune".to_string(),
+        ];
+
+        let result = run(&args).expect("run prune");
+        assert_eq!(result["pruned"], true);
+        assert_eq!(result["stale_removed"], 1);
+        assert_eq!(
+            result["stale_decks"],
+            serde_json::json!(["02_MEDICINA_AnkiMBR::ManualExtra"])
+        );
+        assert_eq!(result["total_subdecks"], 2);
+        assert!(
+            result["deck_details"]
+                .get("02_MEDICINA_AnkiMBR::ManualExtra")
+                .is_none(),
+            "pruned deck must be removed from deck_details"
+        );
+
+        let persisted: Value =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(persisted["total_subdecks"], 2);
+        assert!(
+            persisted["deck_details"]
+                .get("02_MEDICINA_AnkiMBR::ManualExtra")
+                .is_none()
+        );
+        assert_eq!(
+            persisted["decks"],
+            serde_json::json!(["02_MEDICINA_AnkiMBR", "02_MEDICINA_AnkiMBR::Oftalmo"])
+        );
+    }
+
+    #[test]
+    fn test_deck_deleted_in_anki_disappears_on_next_run() {
+        let td = tempfile::tempdir().unwrap();
+        let col_path = td.path().join("collection.anki2");
+        let out_path = td.path().join("deck_hierarchy.json");
+
+        let conn = Connection::open(&col_path).unwrap();
+        conn.execute(
+            "CREATE TABLE decks (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        for (id, name) in [
+            (1, "02_MEDICINA_AnkiMBR"),
+            (2, "02_MEDICINA_AnkiMBR::Cardiologia"),
+            (3, "02_MEDICINA_AnkiMBR::Pediatria"),
+            (4, "02_MEDICINA_AnkiMBR::Nefrologia"),
+        ] {
+            conn.execute("INSERT INTO decks VALUES (?1, ?2)", (id, name))
+                .unwrap();
+        }
+        drop(conn);
+
+        let args = vec![
+            "--collection".to_string(),
+            col_path.to_string_lossy().to_string(),
+            "--output".to_string(),
+            out_path.to_string_lossy().to_string(),
+        ];
+
+        let run1 = run(&args).expect("first sync");
+        assert_eq!(run1["total_subdecks"], 4);
+        assert_eq!(run1["stale_removed"], 0);
+
+        // Anki deletes one deck; the hierarchy file is left untouched between runs.
+        let conn = Connection::open(&col_path).unwrap();
+        conn.execute("DELETE FROM decks WHERE id = 4", []).unwrap();
+        drop(conn);
+
+        let run2 = run(&args).expect("second sync");
+        assert_eq!(
+            run2["total_subdecks"], 3,
+            "deleted deck must not survive: {run2}"
+        );
+        let decks: Vec<&str> = run2["decks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            decks,
+            vec![
+                "02_MEDICINA_AnkiMBR",
+                "02_MEDICINA_AnkiMBR::Cardiologia",
+                "02_MEDICINA_AnkiMBR::Pediatria"
+            ]
+        );
+        assert!(
+            !decks.contains(&"02_MEDICINA_AnkiMBR::Nefrologia"),
+            "deleted deck reappeared: {decks:?}"
+        );
+
+        let persisted: Value =
+            serde_json::from_str(&fs::read_to_string(&out_path).unwrap()).unwrap();
+        assert_eq!(persisted["total_subdecks"], 3);
     }
 
     #[test]

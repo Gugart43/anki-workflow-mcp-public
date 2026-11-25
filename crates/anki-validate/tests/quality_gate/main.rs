@@ -4,3 +4,4 @@ mod content_checks;
 mod evidence;
 mod identities;
 mod lifecycle;
+mod notes;

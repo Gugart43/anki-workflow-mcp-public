@@ -7,6 +7,10 @@
 
 export type Severity = "CRITICAL" | "WARN" | "INFO" | "LOG";
 export type CompatibilityProfile = "legacy_compat" | "strict_v2";
+/**
+ * Modo de compilação do documento de notas adicionais.
+ */
+export type CompileMode = "legacy_compat" | "strict_v2";
 export type StringOrVec = string | string[];
 export type OneOrManyFigures = RawMediaFigure | RawMediaFigure[];
 export type RawExtraNotesInput = string | NoteDocument | RawExtraNotes;
@@ -82,10 +86,6 @@ export type SourceLocation =
     };
 export type NoteBlockKind = "paragrafo" | "lista" | "alerta" | "tabela" | "fluxograma";
 export type CardTipo = "QA" | "CLOZE";
-/**
- * Modo de compilação do documento de notas adicionais.
- */
-export type CompileMode = "legacy_compat" | "strict_v2";
 export type ContentDigest = string;
 export type EvidenceScope = "retrieval" | "context" | "notes";
 /**
@@ -168,6 +168,13 @@ export interface CardInformationReview {
 }
 export interface Diagnostic {
   auto_fix_available: boolean;
+  /**
+   * Original diagnostic code this entry was derived from, when a pipeline
+   * stage re-labels a diagnostic under a gate-specific code (e.g. a
+   * `NOTE.*` Critical surfaced as `QUALITY.CARD_CRITICAL`). `None` for
+   * native diagnostics, so serialized JSON is unchanged in that case.
+   */
+  cause_code?: string | null;
   code: string;
   field?: string | null;
   fix_preview?: string | null;
@@ -186,8 +193,21 @@ export interface BatchPatchDraftArgs {
   };
 }
 export interface CompileDraftsArgs {
+  /**
+   * Strip leaked internal identifiers (deck/note/board ids) from rendered text (default `true`).
+   * Set to `false` only when the identifiers are intentional content.
+   */
   auto_purge_id_leaks?: boolean;
+  /**
+   * Rewrite Cloze deletions into sequential `c1..cN` order before compiling (default `true`).
+   * Set to `false` only when the draft already carries the final indices.
+   */
   auto_renumber_cloze?: boolean;
+  compile_mode?: CompileMode;
+  /**
+   * Fallback value for the `Campo de Estudo` column, applied to drafts that omit
+   * `campo_estudo` / `study_field` (default empty string).
+   */
   default_campo_estudo?: string;
   /**
    * List of card draft objects (QA or Cloze) to normalize and compile.
@@ -339,7 +359,7 @@ export interface InfoPolicy {
   preferred_list_format: string;
   source_fidelity: string;
 }
-export interface EmptyArgs {}
+export type EmptyArgs = Record<string, never>;
 /**
  * Arguments for `export_reviewed_files`.
  */
@@ -361,6 +381,11 @@ export interface ExportReviewedFilesResult {
   cloze_file: string;
   qa_file: string;
   receipt_hash: string;
+  /**
+   * `true` only when the ledger record was recreated from files already present on disk
+   * (crash between swap and ledger write), i.e. the export was adopted, not replayed.
+   */
+  recovered_from_disk?: boolean;
   root_mirror_written: boolean;
   state_file: string;
   status: ExportStatus;
@@ -375,14 +400,26 @@ export interface QualityEvaluateArgs {
   sources?: QualitySourceArg[];
 }
 export interface QualityBindingArg {
+  /**
+   * 1-based Cloze deletion index (`cN`) inside the sentence; required with
+   * `>= 1` for `note_type: CL` and must be absent/null for `note_type: QA`.
+   */
   cloze_index?: number | null;
   evidence: QualityEvidenceArg[];
   note_type: StrictNoteTypeArg;
   obligation_ids: string[];
+  /**
+   * 1-based CSV data row of the retrieval, counting the header row; use `>= 2`
+   * (row 1 is the header). Rows beyond the compiled batch cannot bind any card.
+   */
   source_row: number;
 }
 export interface QualityEvidenceArg {
   locator: string;
+  /**
+   * Excerpt copied verbatim from the referenced `sources[].text`; it must be an exact
+   * substring of that source text (no paraphrasing, normalization, or ellipsis).
+   */
   quote: string;
   scope: EvidenceScope;
   source_id: string;
@@ -393,12 +430,24 @@ export interface QualityObligationArg {
   source_ids: string[];
 }
 export interface QualityReviewArg {
+  /**
+   * 1-based Cloze deletion index (`cN`) inside the sentence; required with
+   * `>= 1` for `note_type: CL` and must be absent/null for `note_type: QA`.
+   */
   cloze_index?: number | null;
   dimensions: ReviewDimensionsArg;
   note_type: StrictNoteTypeArg;
   rationale: string;
   reviewer: string;
+  /**
+   * `snapshot_hash` returned by `quality_prepare` for the exact batch being reviewed;
+   * a stale or foreign hash is reported as `INCOMPLETE` and never authorizes export.
+   */
   snapshot_hash: string;
+  /**
+   * 1-based CSV data row of the reviewed retrieval, counting the header row; use `>= 2`
+   * (row 1 is the header).
+   */
   source_row: number;
   verdict: ReviewVerdict;
 }
@@ -495,7 +544,21 @@ export interface QualityReport {
   export_authorized: boolean;
   guidance: string[];
   mode: string;
+  /**
+   * Canal consultivo: agregado verbatim dos diagnósticos do namespace `NOTE`
+   * (`review.cards[].diagnostics`), ordenado e deduplicado. NÃO participa do
+   * cálculo de `verdict` — avisos de nota continuam apenas consultivos.
+   */
+  notes_diagnostics: Diagnostic[];
   obligation_count: number;
+  /**
+   * Valor aceito pelo argumento `receipt_hash` de
+   * `export_reviewed_files`: exatamente
+   * `anki_domain::compute_receipt_v1(qa_csv, cloze_csv).into_inner()`
+   * (a mesma função que produz `content_hash`, que é mantido por
+   * compatibilidade do relatório).
+   */
+  receipt_hash: string;
   retrieval_count: number;
   review: BatchInformationReview;
   reviewed_count: number;
@@ -508,8 +571,24 @@ export interface ReviewBatchInformationArgs {
   qa_csv: string;
 }
 export interface ToolErrorPayload {
+  /**
+   * Stable machine-readable error code: `INVALID_ARGUMENTS` (argument parse/decode),
+   * `COMPILE.INVALID_DRAFT` (draft decode/normalize/compile), `INVALID_INPUT_RANGES`
+   * (structured range violations), `INTERNAL.SERIALIZE` (result serialization),
+   * `EXPORT.*` (export domain errors).
+   */
   code: string;
+  /**
+   * Single-line, sanitized human-readable error message.
+   */
   error: string;
+  /**
+   * JSON path of the offending argument element, omitted when not applicable.
+   */
+  path?: string | null;
+  /**
+   * Structured field-level violations, always present (empty when there are none).
+   */
   violations: InputViolation[];
 }
 export interface InputViolation {

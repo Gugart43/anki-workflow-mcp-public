@@ -86,15 +86,26 @@ static DOSE_REGIMEN_AFTER_COMMA_RE: LazyLock<Regex> = LazyLock::new(|| {
 static COMPARISON_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\b(?:vs\.?|versus)\b").expect("valid comparison regex"));
 
-static BULLET_INLINE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?:\A|\s)[•]\s+").expect("valid bullet inline regex"));
+// A classe de glifos vem da união única (`text_norm::BULLET_GLYPHS`, Onda 2/B24); só os
+// glifos tipográficos entram, como antes — `-`/`*` inline são pontuação comum em resposta
+// clínica ("anti-inflamatório", "p < 0,05") e não separam itens.
+static BULLET_INLINE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    let glyphs: String = crate::text_norm::BULLET_GLYPHS
+        .iter()
+        .copied()
+        .filter(|c| crate::text_norm::is_glyph_bullet(*c))
+        .collect();
+    Regex::new(&format!(r"(?:\A|\s)[{glyphs}]\s+")).expect("valid bullet inline regex")
+});
 
 static TRAILING_CONJUNCTION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^(.+?)\s+(?:e|and)\s+(.+)$").expect("valid trailing conjunction regex")
 });
 
-static LEADING_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[•\-–—*]|\(\d+\)|\d+\))\s*").expect("valid leading marker regex")
+// Marcador **numerado** no início do item (`(1)`, `1)`). Os bullets em si vêm de
+// [`crate::text_norm::strip_leading_marker`] — a lista de glifos não se repete aqui.
+static LEADING_NUMBERED_MARKER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:\(\d+\)|\d+\))").expect("valid leading numbered marker regex")
 });
 
 fn split_top_level(text: &str, sep_char: char) -> Vec<String> {
@@ -181,7 +192,8 @@ fn split_top_level(text: &str, sep_char: char) -> Vec<String> {
 }
 
 fn split_bullet_inline(seg: &str) -> Vec<String> {
-    if !seg.contains('•') {
+    // Atalho: sem nenhum glifo de bullet da união não há o que separar.
+    if !seg.chars().any(crate::text_norm::is_glyph_bullet) {
         return vec![seg.to_owned()];
     }
     let parts: Vec<String> = BULLET_INLINE_RE
@@ -317,24 +329,61 @@ fn split_trailing_conjunction(mut items: Vec<String>) -> Vec<String> {
     items
 }
 
+/// Evidência **estrutural** de enumeração, coletada junto com
+/// [`extract_candidate_items`].
+///
+/// Espelha a lista `evidence` que `checks/information.py::extract_candidate_items` já
+/// devolve ao Python: a decisão de `QA.CARDINALITY` precisa olhar para marcadores
+/// explícitos, não para a quantidade de vírgulas (Onda 2, B25).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct EnumerationEvidence {
+    /// Duas ou mais linhas visíveis — separadas por `<li>`, `<br>` ou quebra de linha.
+    multi_line: bool,
+    /// Ponto e vírgula de topo separando itens.
+    semicolon: bool,
+    /// Glifo de bullet (ver [`crate::text_norm::is_glyph_bullet`]) separando itens na linha.
+    bullet_marker: bool,
+    /// Numeração inline (`1.`, `2)`, `(3)`) separando itens na linha.
+    numbered_marker: bool,
+}
+
+impl EnumerationEvidence {
+    /// `true` quando há marcador ou separador **explícito** de enumeração.
+    ///
+    /// Vírgula nunca conta: `"Dor retroesternal, em aperto, com irradiação"` é uma resposta
+    /// de um único conceito com vírgulas de aposição, não uma lista.
+    fn is_explicit(self) -> bool {
+        self.multi_line || self.semicolon || self.bullet_marker || self.numbered_marker
+    }
+}
+
 /// Extract candidate recalled items deterministically (`checks/information.py::extract_candidate_items`).
 #[must_use]
 pub fn extract_candidate_items(raw_html: &str) -> Vec<String> {
+    let (items, _) = extract_with_evidence(raw_html);
+    items
+}
+
+/// Extração de candidatos + evidência estrutural (ver [`EnumerationEvidence`]).
+fn extract_with_evidence(raw_html: &str) -> (Vec<String>, EnumerationEvidence) {
+    let mut evidence = EnumerationEvidence::default();
     let (text, _, _) = parse_html_text(raw_html);
     if text.is_empty() {
-        return Vec::new();
+        return (Vec::new(), evidence);
     }
     let lines: Vec<&str> = text
         .lines()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
+    evidence.multi_line = lines.len() >= 2;
 
     // Stage 1: split each line by top-level semicolons
     let mut stage1 = Vec::new();
     for ln in lines {
         let semi_parts = split_top_level(ln, ';');
         if semi_parts.len() >= 2 {
+            evidence.semicolon = true;
             stage1.extend(semi_parts);
         } else {
             stage1.push(ln.to_owned());
@@ -346,11 +395,13 @@ pub fn extract_candidate_items(raw_html: &str) -> Vec<String> {
     for seg in stage1 {
         let bullet_parts = split_bullet_inline(&seg);
         if bullet_parts.len() >= 2 {
+            evidence.bullet_marker = true;
             stage2.extend(bullet_parts);
             continue;
         }
         let num_parts = split_numbered_inline(&seg);
         if num_parts.len() >= 2 {
+            evidence.numbered_marker = true;
             stage2.extend(num_parts);
             continue;
         }
@@ -368,8 +419,16 @@ pub fn extract_candidate_items(raw_html: &str) -> Vec<String> {
     let mut cleaned: Vec<String> = stage2
         .into_iter()
         .map(|item| {
-            let replaced = LEADING_MARKER_RE.replace(&item, "");
-            replaced.trim().to_owned()
+            // Uma única passada, alternando bullet **ou** marcador numerado — mesma
+            // semântica da antiga regex `^(?:[•\-–—*]|\(\d+\)|\d+\))\s*`.
+            let (rest, marker) = crate::text_norm::strip_leading_marker(&item);
+            match marker {
+                Some(_) => rest.trim().to_owned(),
+                None => LEADING_NUMBERED_MARKER_RE
+                    .replace(rest, "")
+                    .trim()
+                    .to_owned(),
+            }
         })
         .filter(|s| !s.is_empty())
         .collect();
@@ -377,7 +436,7 @@ pub fn extract_candidate_items(raw_html: &str) -> Vec<String> {
     if cleaned.is_empty() {
         cleaned.push(html_to_visible_text(raw_html));
     }
-    cleaned
+    (cleaned, evidence)
 }
 
 fn has_bare_number(cleaned_num: &str) -> bool {
@@ -458,9 +517,12 @@ pub fn check_qa(enunciado: &str, resposta: &str, row: Option<usize>) -> Vec<Diag
     }
 
     // ── QA.CARDINALITY ───────────────────────────────────────────────────────
-    let candidate_items = extract_candidate_items(resposta);
+    let (candidate_items, evidence) = extract_with_evidence(resposta);
     let item_count = candidate_items.len();
-    if item_count >= 3 {
+    // ≥3 itens **e** marcador/separador enumerativo explícito (Onda 2, B25). Contagem de
+    // vírgulas não basta: "Dor retroesternal, em aperto, com irradiação para o braço
+    // esquerdo" é uma resposta de um único conceito com vírgulas de aposição.
+    if item_count >= 3 && evidence.is_explicit() {
         let mut d = Diagnostic::new(
             anki_domain::DiagnosticCode::from_static("QA.CARDINALITY"),
             Severity::Critical,
@@ -657,10 +719,47 @@ mod tests {
 
         let d3 = check_qa(
             "Em paciente adulto, quais os achados?",
-            "alfa, beta e gama",
+            "1. alfa; 2. beta; 3. gama",
             None,
         );
         assert!(d3.iter().any(|d| d.code == "QA.CARDINALITY"));
+    }
+
+    /// B25: contagem de vírgulas não sustenta um diagnóstico CRITICAL.
+    ///
+    /// `"alfa, beta e gama"` era positivo até a Onda 2; passa a negativo porque não há
+    /// marcador enumerativo explícito (nem `;`, nem bullet, nem numeração, nem quebra de
+    /// linha) — é exatamente a forma das respostas de um único conceito com vírgulas de
+    /// aposição descritas no defeito.
+    #[test]
+    fn test_cardinality_requires_explicit_enumerative_marker() {
+        let negative = [
+            "alfa, beta e gama",
+            "Dor retroesternal, em aperto, com irradiação para o braço esquerdo",
+            "Cefaleia unilateral, pulsátil, intensidade moderada a grave, piora com atividade física, náusea e fotofobia",
+        ];
+        for answer in negative {
+            let diags = check_qa("Em paciente adulto, quais os achados?", answer, None);
+            assert!(
+                !diags.iter().any(|d| d.code == "QA.CARDINALITY"),
+                "vírgula não é marcador enumerativo: {answer}"
+            );
+        }
+
+        let positive = [
+            "alfa; beta; gama",
+            "alfa • beta • gama",
+            "• alfa<br>• beta<br>• gama",
+            "1. alfa 2. beta 3. gama",
+            "alfa<br>beta<br>gama",
+        ];
+        for answer in positive {
+            let diags = check_qa("Em paciente adulto, quais os achados?", answer, None);
+            assert!(
+                diags.iter().any(|d| d.code == "QA.CARDINALITY"),
+                "marcador enumerativo explícito deve emitir: {answer}"
+            );
+        }
     }
 
     #[test]

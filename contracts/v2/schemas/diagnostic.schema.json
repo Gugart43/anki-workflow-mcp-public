@@ -15,6 +15,13 @@
     "auto_fix_available": {
       "type": "boolean"
     },
+    "cause_code": {
+      "description": "Original diagnostic code this entry was derived from, when a pipeline\nstage re-labels a diagnostic under a gate-specific code (e.g. a\n`NOTE.*` Critical surfaced as `QUALITY.CARD_CRITICAL`). `None` for\nnative diagnostics, so serialized JSON is unchanged in that case.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "code": {
       "type": "string"
     },

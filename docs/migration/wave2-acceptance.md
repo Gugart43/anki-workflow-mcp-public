@@ -1,5 +1,10 @@
 # Aceitação da Integração Wave 2 — Matriz Go/No-Go
 
+> **Documento histórico.** Este arquivo descreve o estado da integração Wave 2 no momento em que foi
+> escrito e menciona ferramentas, subcomandos e códigos de diagnóstico que não existem mais na
+> superfície atual. Ele é mantido apenas como registro de migração e **não deve ser usado como
+> referência de comportamento**. Superfície atual: [docs/architecture.md](../architecture.md).
+
 Documento de conformidade técnica da integração do **pipeline de criação clínica (Wave 2)** e da **camada visual AnkiMBR Theme v2** no workspace Rust/Python deste repositório.
 
 ---

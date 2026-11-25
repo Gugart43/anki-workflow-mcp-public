@@ -137,6 +137,13 @@
         "auto_fix_available": {
           "type": "boolean"
         },
+        "cause_code": {
+          "description": "Original diagnostic code this entry was derived from, when a pipeline\nstage re-labels a diagnostic under a gate-specific code (e.g. a\n`NOTE.*` Critical surfaced as `QUALITY.CARD_CRITICAL`). `None` for\nnative diagnostics, so serialized JSON is unchanged in that case.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "code": {
           "type": "string"
         },
@@ -226,10 +233,21 @@
     "mode": {
       "type": "string"
     },
+    "notes_diagnostics": {
+      "description": "Canal consultivo: agregado verbatim dos diagnósticos do namespace `NOTE`\n(`review.cards[].diagnostics`), ordenado e deduplicado. NÃO participa do\ncálculo de `verdict` — avisos de nota continuam apenas consultivos.",
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      },
+      "type": "array"
+    },
     "obligation_count": {
       "format": "uint",
       "minimum": 0,
       "type": "integer"
+    },
+    "receipt_hash": {
+      "description": "Valor aceito pelo argumento `receipt_hash` de\n`export_reviewed_files`: exatamente\n`anki_domain::compute_receipt_v1(qa_csv, cloze_csv).into_inner()`\n(a mesma função que produz `content_hash`, que é mantido por\ncompatibilidade do relatório).",
+      "type": "string"
     },
     "retrieval_count": {
       "format": "uint",
@@ -259,6 +277,7 @@
     "mode",
     "snapshot_hash",
     "content_hash",
+    "receipt_hash",
     "verdict",
     "clinical_correctness_certified",
     "export_authorized",
@@ -267,6 +286,7 @@
     "obligation_count",
     "covered_obligation_count",
     "diagnostics",
+    "notes_diagnostics",
     "guidance",
     "review"
   ],

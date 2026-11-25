@@ -117,7 +117,6 @@ def test_qa_cardinality_real_stays_critical_without_auto_cloze_conversion():
     for ans in (
         "Item alfa; Item beta; Item gama",
         "<ul><li>alfa</li><li>beta</li><li>gama</li></ul>",
-        "alfa, beta e gama",
     ):
         diags = qa_mod.check_qa(
             "Em paciente adulto, quais os achados da tríade?",
@@ -141,6 +140,9 @@ def test_qa_cardinality_real_stays_critical_without_auto_cloze_conversion():
         "Glossoplegia, caracterizada por paralisia da língua, com desvio ipsilateral, sem disartria",
         "glossoplegia, caracterizada por atrofia, fraqueza e desvio",
         "Pressão 140&#124;90 mmHg &#124; pulso 80 bpm",
+        # B25: só vírgulas — nenhum marcador/separador enumerativo explícito.
+        "alfa, beta e gama",
+        "Dor retroesternal, em aperto, com irradiação para o braço esquerdo",
     ],
 )
 def test_qa_cardinality_does_not_false_positive_on_single_unit_continuations(answer):

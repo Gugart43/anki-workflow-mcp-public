@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from anki_mcp.checks import csv_structure
@@ -392,3 +395,123 @@ def test_tag_whitelist_matches_the_vocab_helper(tag):
             tag,
             is_images_field,
         )
+
+
+# ── B8: parity with crates/anki-validate/src/vocab.rs ───────────────────────
+
+#: Rust is the source of truth: its literals are parsed here instead of being
+#: copied, so a *subset* comparison can no longer hide drift in either direction.
+RUST_VOCAB_RS = (
+    Path(__file__).resolve().parents[1] / "crates" / "anki-validate" / "src" / "vocab.rs"
+)
+
+
+def _rust_str_const(name: str) -> frozenset[str]:
+    """Parse ``const NAME: &[&str] = &["a", "b", ...];`` out of ``vocab.rs``.
+
+    Simple literal parse, no new dependency: the constants are flat arrays of
+    string literals. A renamed/removed constant fails loudly (``assert``) rather
+    than degrading into an empty set that would pass every comparison.
+    """
+    source = RUST_VOCAB_RS.read_text(encoding="utf-8")
+    match = re.search(
+        rf"(?:pub )?const {name}\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\];",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None, f"const {name} not found in {RUST_VOCAB_RS}"
+    tokens = re.findall(r'"([^"]*)"', match.group(1))
+    assert tokens, f"const {name} in {RUST_VOCAB_RS} has no string literals"
+    return frozenset(tokens)
+
+
+RUST_ALLOWED_TAGS = _rust_str_const("ALLOWED_TAGS")
+RUST_IMAGES_ONLY_TAGS = _rust_str_const("IMAGES_ONLY_TAGS")
+RUST_PAIRED_TAGS = _rust_str_const("PAIRED_TAGS")
+RUST_ALLOWED_CLASSES = _rust_str_const("ALLOWED_CLASSES")
+
+
+def _diff_report(label: str, py_set: frozenset[str], rust_set: frozenset[str]) -> str:
+    return (
+        f"{label} diverges from vocab.rs: "
+        f"python-only={sorted(py_set - rust_set)} rust-only={sorted(rust_set - py_set)}"
+    )
+
+
+def test_tag_vocabulary_is_exactly_the_rust_vocabulary():
+    """Strict equality (not subset): a tag Rust adds must break this test."""
+    assert vocab.ALLOWED_TAGS == RUST_ALLOWED_TAGS, _diff_report(
+        "ALLOWED_TAGS", vocab.ALLOWED_TAGS, RUST_ALLOWED_TAGS
+    )
+    assert vocab.IMAGES_ONLY_TAGS == RUST_IMAGES_ONLY_TAGS, _diff_report(
+        "IMAGES_ONLY_TAGS", vocab.IMAGES_ONLY_TAGS, RUST_IMAGES_ONLY_TAGS
+    )
+    assert vocab.PAIRED_TAGS == RUST_PAIRED_TAGS, _diff_report(
+        "PAIRED_TAGS", vocab.PAIRED_TAGS, RUST_PAIRED_TAGS
+    )
+
+
+def test_tag_sets_cover_the_rust_void_and_images_split():
+    """``VOID_TAGS`` is exactly everything Rust allows minus everything it pairs."""
+    known = RUST_ALLOWED_TAGS | RUST_IMAGES_ONLY_TAGS
+    assert vocab.VOID_TAGS == known - RUST_PAIRED_TAGS
+    assert vocab.PAIRED_TAGS <= known
+
+
+def test_class_vocabulary_is_exactly_the_rust_vocabulary():
+    assert vocab.ALLOWED_CLASSES == RUST_ALLOWED_CLASSES, _diff_report(
+        "ALLOWED_CLASSES", vocab.ALLOWED_CLASSES, RUST_ALLOWED_CLASSES
+    )
+    for cls in ("cloze", "cloze-inactive", "destaque", "hint-details", "hint-summary"):
+        assert cls in vocab.ALLOWED_CLASSES, cls
+
+
+def test_semantic_blocks_are_accepted_without_class_warnings():
+    """Same CSV that the Rust validator accepts must not raise FMT.CLASS_UNKNOWN here."""
+    notas = (
+        '<div class="anki-note">'
+        '<section class="anki-note-section">'
+        '<span class="anki-detail">detalhe</span>'
+        '<dl class="anki-kv"><dt class="anki-kv-section">Chave</dt><dd>valor</dd></dl>'
+        "</section>"
+        '<section class="anki-steps"><ol><li>passo</li></ol></section>'
+        '<blockquote class="anki-callout anki-callout--pearl">pérola</blockquote>'
+        '<details class="anki-details"><summary class="hint-summary">ver</summary>x</details>'
+        '<table class="anki-table"><thead><tr><th>a</th></tr></thead>'
+        "<tbody><tr><td>1</td></tr></tbody></table>"
+        '<footer class="anki-sources">Fonte: ref.pdf</footer>'
+        "</div>"
+    )
+    text = f"{HEADER}\n{_row(notas)}"
+    assert _cls(text) == []
+    # B9: the same block also emits zero tag diagnostics — the tag vocabulary is
+    # a strict mirror of vocab.rs, so `<section>`/`<dl>`/`<details>` are canonical.
+    assert _codes(text) == []
+    assert vocab.unknown_classes("anki-note-section anki-list anki-steps anki-flow") == []
+
+
+def test_canonical_v2_blocks_are_not_flagged_as_forbidden_tags():
+    """Regression: `<section>`, `<details>/<summary>`, `<h2>`, `<dl>`, `<abbr>`.
+
+    The Rust compiler (oracle) returns no diagnostic for this note; Python used
+    to answer 18x ``FMT.TAG_FORBIDDEN`` (CRITICAL) because ``ALLOWED_TAGS`` was
+    truncated to 28 tags.
+    """
+    notas = (
+        '<section class="anki-note-section">'
+        '<h2 class="anki-kv-section">Tratamento</h2>'
+        '<dl class="anki-kv">'
+        '<dt class="anki-kv-section"><abbr title="Ativador do plasminogênio tecidual">tPA</abbr></dt>'
+        "<dd>Alteplase EV</dd>"
+        "</dl>"
+        '<details class="anki-details"><summary class="hint-summary">Ver detalhe</summary>'
+        "<p>Janela de 4,5 h</p></details>"
+        "<h3>Notas</h3>"
+        "<pre>dose = peso * 0,9</pre>"
+        "<p>2<sup>a</sup> linha<wbr>opcional</p>"
+        "</section>"
+    )
+    text = f"{HEADER}\n{_row(notas)}"
+    assert _codes(text) == [], _codes(text)
+    for tag in ("section", "details", "summary", "h2", "dl", "dt", "dd", "abbr", "pre", "wbr"):
+        assert vocab.is_allowed_tag(tag, is_images_field=False), tag

@@ -7,8 +7,6 @@ use anki_domain::{Diagnostic, DiagnosticCode, Severity};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::tags::normalize_ptbr;
-
 pub const CODE_DUPLICATE_RETRIEVAL: DiagnosticCode =
     DiagnosticCode::from_static("QUALITY.DUPLICATE_RETRIEVAL");
 pub const CODE_NEAR_DUPLICATE_WARN: DiagnosticCode =
@@ -211,20 +209,13 @@ fn strip_html_and_cloze(input: &str) -> String {
     s.replace("}}", " ").replace("::", " ")
 }
 
+/// Normaliza para comparação de tokens: minúsculas + diacríticos removidos.
+///
+/// Delega para [`crate::text_norm::fold`], a primitiva única de dobra do crate (Onda 2, B24).
+/// Antes era `normalize_ptbr` + uma segunda tabela local com `ä å ë ï ö ü ñ`; `fold` cobre
+/// esse superconjunto, então os limiares de `interference` seguem intocados.
 fn normalize_for_tokens(s: &str) -> String {
-    let base = normalize_ptbr(s);
-    base.chars()
-        .map(|c| match c {
-            'ä' | 'à' | 'á' | 'â' | 'ã' | 'å' => 'a',
-            'ë' | 'è' | 'é' | 'ê' => 'e',
-            'ï' | 'ì' | 'í' | 'î' => 'i',
-            'ö' | 'ò' | 'ó' | 'ô' | 'õ' => 'o',
-            'ü' | 'ù' | 'ú' | 'û' => 'u',
-            'ç' => 'c',
-            'ñ' => 'n',
-            _ => c,
-        })
-        .collect()
+    crate::text_norm::fold(s)
 }
 
 fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {

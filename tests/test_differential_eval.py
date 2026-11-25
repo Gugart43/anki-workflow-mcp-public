@@ -38,6 +38,14 @@ BAD_CLOZE_NONSEQ = (
 
 BAD_QA_CARDINALITY = (
     QA_HEADER
+    + "\nQuais os critérios diagnósticos de migrânea sem aura?|1. Cefaleia unilateral; 2. pulsátil; 3. intensidade moderada a grave; 4. piora com atividade física; 5. náusea e fotofobia.|Neurologia|Critérios ICHD-3.||ICHD-3|Neuro::Migranea"
+)
+
+# B25: a mesma resposta em prosa (só vírgulas) descreve UM conceito com vírgulas de
+# aposição. Sem marcador enumerativo explícito não há QA.CARDINALITY — o veredito PASS é
+# o esperado, e não uma regressão: era o falso positivo CRITICAL medido antes da Onda 2.
+GOOD_QA_APPOSITIVE_COMMAS = (
+    QA_HEADER
     + "\nQuais os critérios diagnósticos de migrânea sem aura?|Cefaleia unilateral, pulsátil, intensidade moderada a grave, piora com atividade física, náusea e fotofobia.|Neurologia|Critérios ICHD-3.||ICHD-3|Neuro::Migranea"
 )
 
@@ -82,6 +90,7 @@ def tool_runners():
         ("clean_pass", GOOD_QA, GOOD_CL, "PASS"),
         ("bad_cloze_nonseq", GOOD_QA, BAD_CLOZE_NONSEQ, "FAIL"),
         ("bad_qa_cardinality", BAD_QA_CARDINALITY, GOOD_CL, "FAIL"),
+        ("good_qa_appositive_commas", GOOD_QA_APPOSITIVE_COMMAS, GOOD_CL, "PASS"),
         ("structural_shifted_pipe", STRUCTURAL_SHIFTED, GOOD_CL, "FAIL"),
     ],
 )

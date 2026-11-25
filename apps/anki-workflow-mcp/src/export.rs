@@ -1,14 +1,14 @@
 //! Atomic export implementation for Anki QA and Cloze reviewed batches.
 //!
 //! Enforces:
-//! - Exact receipt hash integrity verification (`sha256(b"qa\0" + qa_csv + b"\0cloze\0" + cloze_csv)`);
-//! - Exact evaluation verdict requirement (`PASS` exact);
-//! - Fail-closed revalidation of CSV structure via `anki_validate::check_csv` and unsafe HTML via `anki_validate::prepare_quality`;
+//! - Receipt hash integrity verification, accepting both the legacy `sha256(b"qa\0" + qa_csv + b"\0cloze\0" + cloze_csv)` digest and `anki_domain::compute_receipt_v1` (`sha256:<hex>`);
+//! - Exact evaluation verdict requirement (`PASS` exact) plus a `PASS` verdict from the available quality gate report (`EXPORT.INVALID_CONTENT` otherwise);
+//! - Fail-closed revalidation of CSV structure via `anki_validate::check_csv`;
 //! - Rejection of path traversal (`..`), invalid slug characters, Windows/POSIX reserved filenames, and symlink targets;
 //! - Cross-process exclusive file locking (`fs2::FileExt::try_lock_exclusive` with bounded timeout) spanning ledger read, idempotency check, and write/swap;
 //! - Same-filesystem staging and backup paths;
-//! - RAII reverse rollback in `AtomicSwapGuard::drop` preserving recovery backups if restoration fails;
-//! - Idempotent replay recording and verification of actual mirror configuration and existing on-disk files/hashes;
+//! - RAII reverse rollback preserving recovery backups if restoration fails, with accumulated restore failures surfaced as `EXPORT.ROLLBACK_FAILED`;
+//! - Idempotent replay recording and verification of actual mirror configuration and existing on-disk files/hashes, including adoption (`recovered_from_disk`) of files left behind by a crash between swap and ledger write;
 //! - Prevention of topic filename collisions across different batch IDs.
 //!
 //! Note on multi-file atomicity: Each individual file swap is atomic on POSIX/Windows filesystems,
@@ -65,6 +65,10 @@ pub struct ExportReviewedFilesResult {
     pub cloze_file: String,
     pub root_mirror_written: bool,
     pub state_file: String,
+    /// `true` only when the ledger record was recreated from files already present on disk
+    /// (crash between swap and ledger write), i.e. the export was adopted, not replayed.
+    #[serde(default)]
+    pub recovered_from_disk: bool,
 }
 
 /// Status of the export operation.
@@ -128,6 +132,38 @@ pub fn compute_receipt_hash(qa_csv: &str, cloze_csv: &str) -> String {
     hasher.update(b"\0cloze\0");
     hasher.update(cloze_csv.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// Extracts the 64-hex digest body from an accepted receipt value.
+///
+/// Two formats are accepted: the legacy bare 64-hex digest (see [`compute_receipt_hash`])
+/// and `anki_domain::compute_receipt_v1` (`sha256:<64-hex>`), with or without the
+/// `sha256:` prefix.
+fn receipt_digest_body(provided: &str) -> Option<&str> {
+    let body = provided.strip_prefix("sha256:").unwrap_or(provided);
+    let is_hex64 = body.len() == 64 && body.bytes().all(|b| b.is_ascii_hexdigit());
+    is_hex64.then_some(body)
+}
+
+/// Returns true when `digest_body` matches either accepted receipt formula for the content.
+fn receipt_matches_content(digest_body: &str, qa_csv: &str, cloze_csv: &str) -> bool {
+    let legacy = compute_receipt_hash(qa_csv, cloze_csv);
+    let v1 = anki_domain::compute_receipt_v1(qa_csv, cloze_csv).into_inner();
+    let v1_body = v1.strip_prefix("sha256:").unwrap_or(v1.as_str());
+    digest_body.eq_ignore_ascii_case(&legacy) || digest_body.eq_ignore_ascii_case(v1_body)
+}
+
+/// Formats a distinct, sorted list of `CRITICAL` diagnostic codes from a quality report.
+fn critical_codes(report: &anki_validate::QualityReport) -> Vec<String> {
+    let mut codes: Vec<String> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == anki_domain::Severity::Critical)
+        .map(|d| d.code.as_str().to_string())
+        .collect();
+    codes.sort();
+    codes.dedup();
+    codes
 }
 
 /// Returns true if the string is a valid slug (alphanumeric, underscores, hyphens, non-empty).
@@ -275,11 +311,59 @@ struct SwappedEntry {
     backup: Option<PathBuf>,
 }
 
+/// A single restore failure observed while rolling a batch back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackFailure {
+    /// Backup preserved on disk (`None` when the entry had no previous file).
+    pub backup: Option<String>,
+    pub target: String,
+    pub error: String,
+}
+
+/// Accumulated result of a rollback: how many entries were restored and which ones failed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RollbackOutcome {
+    pub restored: usize,
+    pub removed: usize,
+    pub failures: Vec<RollbackFailure>,
+}
+
+impl RollbackOutcome {
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
+/// Combines the original failure with the rollback outcome, surfacing un-restored files.
+fn rollback_failed(original: ExportError, outcome: &RollbackOutcome) -> ExportError {
+    if outcome.is_complete() {
+        return original;
+    }
+    let list = outcome
+        .failures
+        .iter()
+        .map(|f| match &f.backup {
+            Some(bak) => format!("'{bak}' -> '{}': {}", f.target, f.error),
+            None => format!("remove '{}': {}", f.target, f.error),
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    ExportError::new(
+        "EXPORT.ROLLBACK_FAILED",
+        format!(
+            "Rollback incompleto: {} arquivo(s) não restaurado(s) [{list}]. Erro original: {original}",
+            outcome.failures.len()
+        ),
+    )
+}
+
 /// RAII transaction guard for atomic staging, swapping, and reverse rollback.
 pub struct AtomicSwapGuard {
     stage_dir: PathBuf,
     swapped: Vec<SwappedEntry>,
     committed: bool,
+    rolled_back: bool,
     nonce: u128,
     fail_after_swaps: Option<usize>,
 }
@@ -301,6 +385,7 @@ impl AtomicSwapGuard {
             stage_dir,
             swapped: Vec::new(),
             committed: false,
+            rolled_back: false,
             nonce,
             fail_after_swaps: None,
         })
@@ -349,8 +434,14 @@ impl AtomicSwapGuard {
         };
 
         if let Err(err) = replace_file(staged, target) {
-            if let Some(ref bak) = backup {
-                let _ = replace_file(bak, target);
+            if let Some(ref bak) = backup
+                && let Err(restore_err) = replace_file(bak, target)
+            {
+                eprintln!(
+                    "CRITICAL: Failed to restore backup '{}' to '{}' after swap failure: {restore_err}. Recovery backup preserved on disk.",
+                    bak.display(),
+                    target.display()
+                );
             }
             return Err(err);
         }
@@ -360,6 +451,49 @@ impl AtomicSwapGuard {
             backup,
         });
         Ok(())
+    }
+
+    /// Reverts every swapped entry in reverse order, accumulating restore failures instead of
+    /// discarding them. Safe to call once; a later `drop` will not repeat the rollback.
+    pub fn rollback(&mut self) -> RollbackOutcome {
+        let mut outcome = RollbackOutcome::default();
+        while let Some(entry) = self.swapped.pop() {
+            match &entry.backup {
+                Some(bak) => match replace_file(bak, &entry.target) {
+                    Ok(()) => outcome.restored += 1,
+                    Err(err) => {
+                        eprintln!(
+                            "CRITICAL: Failed to restore backup '{}' to '{}': {err}. Recovery backup preserved on disk.",
+                            bak.display(),
+                            entry.target.display()
+                        );
+                        outcome.failures.push(RollbackFailure {
+                            backup: Some(bak.display().to_string()),
+                            target: entry.target.display().to_string(),
+                            error: err.to_string(),
+                        });
+                    }
+                },
+                None => match fs::remove_file(&entry.target) {
+                    Ok(()) => outcome.removed += 1,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => {
+                        eprintln!(
+                            "CRITICAL: Failed to remove partially written '{}': {err}",
+                            entry.target.display()
+                        );
+                        outcome.failures.push(RollbackFailure {
+                            backup: None,
+                            target: entry.target.display().to_string(),
+                            error: err.to_string(),
+                        });
+                    }
+                },
+            }
+        }
+        self.rolled_back = true;
+        let _ = fs::remove_dir_all(&self.stage_dir);
+        outcome
     }
 
     pub fn commit(mut self) -> std::io::Result<()> {
@@ -376,26 +510,11 @@ impl AtomicSwapGuard {
 
 impl Drop for AtomicSwapGuard {
     fn drop(&mut self) {
-        if self.committed {
+        if self.committed || self.rolled_back {
             return;
         }
-        for entry in self.swapped.iter().rev() {
-            match &entry.backup {
-                Some(bak) => {
-                    if let Err(err) = replace_file(bak, &entry.target) {
-                        eprintln!(
-                            "CRITICAL: Failed to restore backup '{}' to '{}': {err}. Recovery backup preserved on disk.",
-                            bak.display(),
-                            entry.target.display()
-                        );
-                    }
-                }
-                None => {
-                    let _ = fs::remove_file(&entry.target);
-                }
-            }
-        }
-        let _ = fs::remove_dir_all(&self.stage_dir);
+        // Failures are already reported by `rollback` via stderr; `Drop` cannot return them.
+        let _ = self.rollback();
     }
 }
 
@@ -440,20 +559,22 @@ pub fn execute_export_reviewed_files(
         ));
     }
 
-    // 3. Receipt hash format (64-char hex) and exact content match
-    if args.receipt_hash.len() != 64 || !args.receipt_hash.chars().all(|c| c.is_ascii_hexdigit()) {
+    // 3. Receipt hash format and exact content match.
+    // Accepts both the legacy bare 64-hex digest and `compute_receipt_v1` (`sha256:<hex>`).
+    let Some(provided_digest) = receipt_digest_body(&args.receipt_hash) else {
         return Err(ExportError::new(
             "EXPORT.NO_RECEIPT",
-            "receipt_hash must be a valid 64-character hex digest.",
+            "receipt_hash must be a 64-character hex digest (optionally prefixed by 'sha256:').",
         ));
-    }
-    let expected_hash = compute_receipt_hash(&args.qa_csv, &args.cloze_csv);
-    if !args.receipt_hash.eq_ignore_ascii_case(&expected_hash) {
+    };
+    if !receipt_matches_content(provided_digest, &args.qa_csv, &args.cloze_csv) {
         return Err(ExportError::new(
             "EXPORT.NO_RECEIPT",
             "receipt_hash divergente do conteúdo revisado.",
         ));
     }
+    // Canonical value persisted in the ledger (legacy formula, unchanged for compatibility).
+    let expected_hash = compute_receipt_hash(&args.qa_csv, &args.cloze_csv);
 
     // 4. CSV structure revalidation
     let qa_diags = anki_validate::check_csv(&args.qa_csv, anki_domain::NoteType::Qa, true);
@@ -478,7 +599,11 @@ pub fn execute_export_reviewed_files(
         ));
     }
 
-    // 5. Unsafe HTML revalidation via quality pipeline
+    // 5. Quality gate revalidation: `PASS` is required (fail-closed).
+    //
+    // Quick mode is used on purpose: it never emits review data, so `PASS` here means the
+    // structural/HTML gate found nothing blocking, exactly as documented for
+    // `evaluation_verdict` above. Any non-`PASS` verdict blocks the export.
     let quality_input = anki_validate::QualityInput {
         qa_csv: args.qa_csv.clone(),
         cloze_csv: args.cloze_csv.clone(),
@@ -489,16 +614,18 @@ pub fn execute_export_reviewed_files(
         reviews: Vec::new(),
     };
     let quality_report = anki_validate::prepare_quality(&quality_input);
-    if let Some(diag) = quality_report
-        .diagnostics
-        .iter()
-        .find(|d| d.code == "QUALITY.UNSAFE_HTML")
-    {
+    if quality_report.verdict != "PASS" {
+        let codes = critical_codes(&quality_report);
+        let codes_label = if codes.is_empty() {
+            "nenhum CRITICAL".to_string()
+        } else {
+            codes.join(", ")
+        };
         return Err(ExportError::new(
-            "EXPORT.UNSAFE_HTML",
+            "EXPORT.INVALID_CONTENT",
             format!(
-                "Active HTML or unsafe attributes rejected: {}",
-                diag.message
+                "Gate de qualidade reprovou o lote: verdict '{}' (PASS é exigido); código(s) CRITICAL: {codes_label}",
+                quality_report.verdict
             ),
         ));
     }
@@ -693,6 +820,7 @@ pub fn execute_export_reviewed_files(
             cloze_file: existing.cloze_file.clone(),
             root_mirror_written: existing.root_mirror_written,
             state_file: state_path.display().to_string(),
+            recovered_from_disk: false,
         });
     }
 
@@ -712,30 +840,44 @@ pub fn execute_export_reviewed_files(
         }
     }
 
-    // Prevent overwriting existing untracked files on disk
-    if qa_target.exists() || cloze_target.exists() {
+    // Prevent overwriting unrelated untracked files. A leftover file from an interrupted
+    // run (crash between swap and ledger write) is adopted when its content matches the
+    // receipt; anything else needs explicit operator recovery.
+    let exports_present = qa_target.exists() || cloze_target.exists();
+    let root_present =
+        args.write_to_deck_root && (root_qa_target.exists() || root_cloze_target.exists());
+    if exports_present || root_present {
+        if let Some(adopted) = adopt_preexisting_export(
+            args,
+            provided_digest,
+            &expected_hash,
+            &exports_dir,
+            &state_path,
+            &qa_target,
+            &cloze_target,
+            &root_qa_target,
+            &root_cloze_target,
+            &mut ledger,
+        )? {
+            return Ok(adopted);
+        }
+
+        let mut leftover: Vec<String> = Vec::new();
+        for path in [
+            &qa_target,
+            &cloze_target,
+            &root_qa_target,
+            &root_cloze_target,
+        ] {
+            if path.exists() {
+                leftover.push(path.display().to_string());
+            }
+        }
         return Err(ExportError::new(
-            "EXPORT.FILE_COLLISION",
+            "EXPORT.RECOVERY_REQUIRED",
             format!(
-                "Target export file already exists on disk: {}",
-                if qa_target.exists() {
-                    &qa_filename
-                } else {
-                    &cloze_filename
-                }
-            ),
-        ));
-    }
-    if args.write_to_deck_root && (root_qa_target.exists() || root_cloze_target.exists()) {
-        return Err(ExportError::new(
-            "EXPORT.FILE_COLLISION",
-            format!(
-                "Root target export file already exists on disk: {}",
-                if root_qa_target.exists() {
-                    &qa_filename
-                } else {
-                    &cloze_filename
-                }
+                "Arquivo(s) já presente(s) sem registro no ledger: {}. O conteúdo não corresponde ao receipt_hash informado, então o lote não pode ser adotado; mova/remova esses arquivos ou restaure o ledger e repita a exportação.",
+                leftover.join(", ")
             ),
         ));
     }
@@ -765,41 +907,20 @@ pub fn execute_export_reviewed_files(
     let mut guard = AtomicSwapGuard::new(&exports_dir, &args.batch_id)
         .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
 
-    let staged_qa = guard
-        .stage_bytes("qa.csv", args.qa_csv.as_bytes())
-        .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
-    let staged_cloze = guard
-        .stage_bytes("cloze.csv", args.cloze_csv.as_bytes())
-        .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
-    let staged_state = guard
-        .stage_bytes("state.json", &state_bytes)
-        .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
-
-    guard
-        .swap_in(&staged_qa, &qa_target)
-        .map_err(|e| ExportError::new("EXPORT.SWAP_ERROR", e.to_string()))?;
-    guard
-        .swap_in(&staged_cloze, &cloze_target)
-        .map_err(|e| ExportError::new("EXPORT.SWAP_ERROR", e.to_string()))?;
-
-    if args.write_to_deck_root {
-        let s_rqa = guard
-            .stage_bytes("root_qa.csv", args.qa_csv.as_bytes())
-            .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
-        let s_rcl = guard
-            .stage_bytes("root_cloze.csv", args.cloze_csv.as_bytes())
-            .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
-        guard
-            .swap_in(&s_rqa, &root_qa_target)
-            .map_err(|e| ExportError::new("EXPORT.SWAP_ERROR", e.to_string()))?;
-        guard
-            .swap_in(&s_rcl, &root_cloze_target)
-            .map_err(|e| ExportError::new("EXPORT.SWAP_ERROR", e.to_string()))?;
+    let swap_result = stage_and_swap_export(
+        &mut guard,
+        args,
+        &state_bytes,
+        &qa_target,
+        &cloze_target,
+        &root_qa_target,
+        &root_cloze_target,
+        &state_path,
+    );
+    if let Err(err) = swap_result {
+        let outcome = guard.rollback();
+        return Err(rollback_failed(err, &outcome));
     }
-
-    guard
-        .swap_in(&staged_state, &state_path)
-        .map_err(|e| ExportError::new("EXPORT.SWAP_ERROR", e.to_string()))?;
 
     guard
         .commit()
@@ -813,7 +934,142 @@ pub fn execute_export_reviewed_files(
         cloze_file: cloze_target.display().to_string(),
         root_mirror_written: args.write_to_deck_root,
         state_file: state_path.display().to_string(),
+        recovered_from_disk: false,
     })
+}
+
+/// Stages the batch payload and swaps every target into place, leaving rollback to the caller.
+#[allow(clippy::too_many_arguments)]
+fn stage_and_swap_export(
+    guard: &mut AtomicSwapGuard,
+    args: &ExportReviewedFilesArgs,
+    state_bytes: &[u8],
+    qa_target: &Path,
+    cloze_target: &Path,
+    root_qa_target: &Path,
+    root_cloze_target: &Path,
+    state_path: &Path,
+) -> Result<(), ExportError> {
+    let io_error = |e: std::io::Error| ExportError::new("EXPORT.IO_ERROR", e.to_string());
+    let swap_error = |e: std::io::Error| ExportError::new("EXPORT.SWAP_ERROR", e.to_string());
+
+    let staged_qa = guard
+        .stage_bytes("qa.csv", args.qa_csv.as_bytes())
+        .map_err(io_error)?;
+    let staged_cloze = guard
+        .stage_bytes("cloze.csv", args.cloze_csv.as_bytes())
+        .map_err(io_error)?;
+    let staged_state = guard
+        .stage_bytes("state.json", state_bytes)
+        .map_err(io_error)?;
+
+    guard.swap_in(&staged_qa, qa_target).map_err(swap_error)?;
+    guard
+        .swap_in(&staged_cloze, cloze_target)
+        .map_err(swap_error)?;
+
+    if args.write_to_deck_root {
+        let s_rqa = guard
+            .stage_bytes("root_qa.csv", args.qa_csv.as_bytes())
+            .map_err(io_error)?;
+        let s_rcl = guard
+            .stage_bytes("root_cloze.csv", args.cloze_csv.as_bytes())
+            .map_err(io_error)?;
+        guard.swap_in(&s_rqa, root_qa_target).map_err(swap_error)?;
+        guard
+            .swap_in(&s_rcl, root_cloze_target)
+            .map_err(swap_error)?;
+    }
+
+    guard
+        .swap_in(&staged_state, state_path)
+        .map_err(swap_error)?;
+    Ok(())
+}
+
+/// Recreates the ledger record when the batch files on disk already match the receipt but no
+/// record exists (crash between the swap and the ledger write). Returns `None` when the
+/// leftover files cannot be proven identical to the requested export.
+#[allow(clippy::too_many_arguments)]
+fn adopt_preexisting_export(
+    args: &ExportReviewedFilesArgs,
+    provided_digest: &str,
+    expected_hash: &str,
+    exports_dir: &Path,
+    state_path: &Path,
+    qa_target: &Path,
+    cloze_target: &Path,
+    root_qa_target: &Path,
+    root_cloze_target: &Path,
+    ledger: &mut ExportStateLedger,
+) -> Result<Option<ExportReviewedFilesResult>, ExportError> {
+    let Ok(disk_qa) = fs::read_to_string(qa_target) else {
+        return Ok(None);
+    };
+    let Ok(disk_cloze) = fs::read_to_string(cloze_target) else {
+        return Ok(None);
+    };
+    if !receipt_matches_content(provided_digest, &disk_qa, &disk_cloze) {
+        return Ok(None);
+    }
+    if args.write_to_deck_root {
+        let Ok(root_qa) = fs::read_to_string(root_qa_target) else {
+            return Ok(None);
+        };
+        let Ok(root_cloze) = fs::read_to_string(root_cloze_target) else {
+            return Ok(None);
+        };
+        if root_qa != args.qa_csv || root_cloze != args.cloze_csv {
+            return Ok(None);
+        }
+    }
+
+    ledger.batches.insert(
+        args.batch_id.clone(),
+        ExportBatchRecord {
+            state: "exported".to_string(),
+            receipt_hash: expected_hash.to_string(),
+            qa_file: qa_target.display().to_string(),
+            cloze_file: cloze_target.display().to_string(),
+            exported_at_unix: unix_now(),
+            root_mirror_written: args.write_to_deck_root,
+            topic_slug: args.topic_slug.clone(),
+        },
+    );
+    let state_bytes = serde_json::to_vec_pretty(ledger).map_err(|e| {
+        ExportError::new(
+            "EXPORT.SERIALIZE_ERROR",
+            format!("Serialization error: {e}"),
+        )
+    })?;
+
+    let mut guard = AtomicSwapGuard::new(exports_dir, &args.batch_id)
+        .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
+    let staged_state = guard
+        .stage_bytes("state.json", &state_bytes)
+        .map_err(|e| ExportError::new("EXPORT.IO_ERROR", e.to_string()))?;
+    let swap_result = guard.swap_in(&staged_state, state_path);
+    if let Err(err) = swap_result {
+        let outcome = guard.rollback();
+        return Err(rollback_failed(
+            ExportError::new("EXPORT.SWAP_ERROR", err.to_string()),
+            &outcome,
+        ));
+    }
+    guard
+        .commit()
+        .map_err(|e| ExportError::new("EXPORT.COMMIT_ERROR", e.to_string()))?;
+
+    Ok(Some(ExportReviewedFilesResult {
+        status: ExportStatus::AlreadyExported,
+        batch_id: args.batch_id.clone(),
+        receipt_hash: expected_hash.to_string(),
+        qa_file: qa_target.display().to_string(),
+        cloze_file: cloze_target.display().to_string(),
+        root_mirror_written: args.write_to_deck_root,
+        state_file: state_path.display().to_string(),
+        recovered_from_disk: true,
+    }))
 }
 
 #[cfg(test)]
@@ -910,7 +1166,197 @@ mod tests {
         args.qa_csv = malicious_qa;
         args.receipt_hash = compute_receipt_hash(&args.qa_csv, &args.cloze_csv);
         let err = execute_export_reviewed_files(&args).unwrap_err();
-        assert_eq!(err.code, "EXPORT.UNSAFE_HTML");
+        assert_eq!(err.code, "EXPORT.INVALID_CONTENT");
+        assert!(err.message.contains("FAIL"), "{}", err.message);
+        assert!(
+            err.message.contains("QUALITY.UNSAFE_HTML"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_quality_gate_non_pass_verdict_blocks_export() {
+        let tmp = TempDir::new().unwrap();
+        let mut args = create_test_args(tmp.path(), "batch_gate_fail");
+
+        // Structurally valid Cloze CSV, but the cloze marker is never closed: the gate
+        // reports `QUALITY.MALFORMED_CLOZE` (CRITICAL) and the verdict is FAIL.
+        args.cloze_csv = "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\nO tratamento inicial é {{c1::aspirina||Cardiologia|||med::cardio\n".to_string();
+        args.receipt_hash = compute_receipt_hash(&args.qa_csv, &args.cloze_csv);
+
+        let err = execute_export_reviewed_files(&args).unwrap_err();
+        assert_eq!(err.code, "EXPORT.INVALID_CONTENT", "{}", err.message);
+        assert!(err.message.contains("'FAIL'"), "{}", err.message);
+        assert!(
+            err.message.contains("QUALITY.MALFORMED_CLOZE"),
+            "{}",
+            err.message
+        );
+
+        // Nothing was written: no export happened behind the gate's back.
+        assert!(
+            !tmp.path()
+                .join("exports")
+                .join("batch_gate_fail_QA.csv")
+                .exists()
+        );
+        assert!(!tmp.path().join("batch_gate_fail_QA.csv").exists());
+    }
+
+    #[test]
+    fn test_receipt_hash_accepts_v1_and_legacy_formats() {
+        let v1 = anki_domain::compute_receipt_v1(VALID_QA, VALID_CLOZE).into_inner();
+        assert!(v1.starts_with("sha256:"));
+        let legacy = compute_receipt_hash(VALID_QA, VALID_CLOZE);
+
+        let variants = [
+            ("legacy bare hex", legacy.clone()),
+            ("legacy uppercase", legacy.to_uppercase()),
+            ("v1 prefixed", v1.clone()),
+            ("v1 bare hex", v1.trim_start_matches("sha256:").to_string()),
+        ];
+
+        for (label, receipt) in variants {
+            let tmp = TempDir::new().unwrap();
+            let mut args = create_test_args(tmp.path(), "batch_receipt_fmt");
+            args.receipt_hash = receipt;
+            let res = execute_export_reviewed_files(&args)
+                .unwrap_or_else(|e| panic!("{label} must be accepted: {e}"));
+            assert_eq!(res.status, ExportStatus::Exported, "{label}");
+
+            // Ledger keeps the canonical legacy digest, so replay stays stable.
+            let state = fs::read_to_string(&res.state_file).unwrap();
+            let ledger: ExportStateLedger = serde_json::from_str(&state).unwrap();
+            assert_eq!(
+                ledger.batches["batch_receipt_fmt"].receipt_hash,
+                compute_receipt_hash(VALID_QA, VALID_CLOZE),
+                "{label}"
+            );
+        }
+
+        // A v1 digest for different content is still rejected.
+        let other_v1 = anki_domain::compute_receipt_v1(
+            VALID_QA,
+            "Sentença|Notas Adicionais|Campo de Estudo|Imagens Relacionadas|Referências|Etiquetas\n{{c1::Other}} test sentence.||Cardiologia|||med::cardio\n",
+        )
+        .into_inner();
+        let tmp = TempDir::new().unwrap();
+        let mut args = create_test_args(tmp.path(), "batch_receipt_bad");
+        args.receipt_hash = other_v1;
+        let err = execute_export_reviewed_files(&args).unwrap_err();
+        assert_eq!(err.code, "EXPORT.NO_RECEIPT");
+
+        // Malformed prefixed value is rejected before any content comparison.
+        args.receipt_hash = "sha256:nothex".to_string();
+        let err = execute_export_reviewed_files(&args).unwrap_err();
+        assert_eq!(err.code, "EXPORT.NO_RECEIPT");
+    }
+
+    #[test]
+    fn test_rollback_failures_accumulate_into_rollback_failed() {
+        let tmp = TempDir::new().unwrap();
+        let exports_dir = tmp.path().join("exports");
+        fs::create_dir_all(&exports_dir).unwrap();
+
+        let target = exports_dir.join("batch_rb_QA.csv");
+        fs::write(&target, "ORIGINAL").unwrap();
+
+        let mut guard = AtomicSwapGuard::new(&exports_dir, "batch_rb").unwrap();
+        let staged = guard.stage_bytes("qa.csv", b"NEW").unwrap();
+        guard.swap_in(&staged, &target).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "NEW");
+
+        // Double failure: the backup required for restoration is gone.
+        let backup = guard.swapped[0].backup.clone().unwrap();
+        fs::remove_file(&backup).unwrap();
+
+        let original = ExportError::new("EXPORT.SWAP_ERROR", "simulated swap failure");
+        let outcome = guard.rollback();
+
+        assert!(!outcome.is_complete());
+        assert_eq!(outcome.restored, 0);
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(
+            outcome.failures[0].backup.as_deref(),
+            Some(backup.display().to_string().as_str())
+        );
+
+        let err = rollback_failed(original.clone(), &outcome);
+        assert_eq!(err.code, "EXPORT.ROLLBACK_FAILED");
+        assert!(
+            err.message.contains("1 arquivo(s) não restaurado(s)"),
+            "{}",
+            err.message
+        );
+        assert!(
+            err.message.contains(&backup.display().to_string()),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("EXPORT.SWAP_ERROR"), "{}", err.message);
+
+        // A complete rollback keeps the original error code untouched.
+        let complete = RollbackOutcome::default();
+        assert_eq!(rollback_failed(original.clone(), &complete), original);
+
+        // Guard is inert after an explicit rollback (no double restore, no panic).
+        drop(guard);
+    }
+
+    #[test]
+    fn test_crash_between_swap_and_ledger_is_adopted() {
+        let tmp = TempDir::new().unwrap();
+        let args = create_test_args(tmp.path(), "batch_adopt");
+        let first = execute_export_reviewed_files(&args).unwrap();
+        assert_eq!(first.status, ExportStatus::Exported);
+
+        // Simulate the crash window: payload files are on disk but the ledger lost the record.
+        let state_path = PathBuf::from(&first.state_file);
+        fs::remove_file(&state_path).unwrap();
+        assert!(Path::new(&first.qa_file).exists());
+        assert!(Path::new(&first.cloze_file).exists());
+
+        let adopted = execute_export_reviewed_files(&args).expect("adoption must not collide");
+        assert_eq!(adopted.status, ExportStatus::AlreadyExported);
+        assert!(adopted.recovered_from_disk);
+        assert_eq!(adopted.qa_file, first.qa_file);
+
+        // The ledger record was recreated, so the next run is a plain replay.
+        let raw = fs::read_to_string(&state_path).unwrap();
+        let ledger: ExportStateLedger = serde_json::from_str(&raw).unwrap();
+        assert!(ledger.batches.contains_key("batch_adopt"));
+
+        let replay = execute_export_reviewed_files(&args).unwrap();
+        assert_eq!(replay.status, ExportStatus::AlreadyExported);
+        assert!(!replay.recovered_from_disk);
+    }
+
+    #[test]
+    fn test_preexisting_untracked_files_require_recovery() {
+        let tmp = TempDir::new().unwrap();
+        let exports_dir = tmp.path().join("exports");
+        fs::create_dir_all(&exports_dir).unwrap();
+
+        // Untracked leftovers that do not match the requested receipt.
+        fs::write(exports_dir.join("batch_stale_QA.csv"), "ALIEN QA").unwrap();
+        fs::write(exports_dir.join("batch_stale_Cloze.csv"), "ALIEN CLOZE").unwrap();
+
+        let args = create_test_args(tmp.path(), "batch_stale");
+        let err = execute_export_reviewed_files(&args).unwrap_err();
+        assert_eq!(err.code, "EXPORT.RECOVERY_REQUIRED", "{}", err.message);
+        assert!(
+            err.message.contains("batch_stale_QA.csv"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("ledger"), "{}", err.message);
+
+        // Leftovers are never overwritten nor adopted.
+        assert_eq!(
+            fs::read_to_string(exports_dir.join("batch_stale_QA.csv")).unwrap(),
+            "ALIEN QA"
+        );
     }
 
     #[test]

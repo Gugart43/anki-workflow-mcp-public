@@ -22,11 +22,11 @@ rules:
 
 operations:
   apply:
-    guidance: |
-      Executar openspec validate --strict e alinhar schema MCP, Rust e testes reais.
-      Preservar evidência dos gates e registrar bloqueios sem inventar resultados.
+    guidance:
+      - Executar openspec validate --strict e alinhar schema MCP, Rust e testes reais.
+      - Preservar evidência dos gates e registrar bloqueios sem inventar resultados.
   archive:
-    guidance: |
-      Promover delta specs antes de arquivar. Registrar desvios e evidência disponível.
-      Não inventar link de CI pós-merge quando não houve publicação/merge.
+    guidance:
+      - Promover delta specs antes de arquivar. Registrar desvios e evidência disponível.
+      - Não inventar link de CI pós-merge quando não houve publicação/merge.
 

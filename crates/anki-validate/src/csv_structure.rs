@@ -116,6 +116,34 @@ fn find_class_attrs(tag_inner: &str) -> Vec<&str> {
     out
 }
 
+/// Metadata for the `auto_fix_available` / `fix_preview` fields of a diagnostic.
+///
+/// This runs the whole `sanitize_field` pipeline, which is the most expensive
+/// step of `check_csv`; it is therefore computed only when a diagnostic that
+/// carries the suggestion is actually emitted (see `cached_auto_fix`).
+fn auto_fix_metadata(value: &str, is_images_field: bool) -> (bool, Option<String>) {
+    let (sanitized, _) = sanitize_field(value, is_images_field, true);
+    let auto_fix_available = sanitized != value;
+    let fix_preview = if auto_fix_available {
+        Some(sanitized.chars().take(200).collect())
+    } else {
+        None
+    };
+    (auto_fix_available, fix_preview)
+}
+
+/// Lazily compute the auto-fix metadata of the current field, memoized in
+/// `cache` so a field with both `<` and a bare `&` sanitizes only once.
+fn cached_auto_fix(
+    cache: &mut Option<(bool, Option<String>)>,
+    value: &str,
+    is_images_field: bool,
+) -> (bool, Option<String>) {
+    let (auto_fix_available, fix_preview) =
+        cache.get_or_insert_with(|| auto_fix_metadata(value, is_images_field));
+    (*auto_fix_available, fix_preview.clone())
+}
+
 fn check_entities_and_brackets(
     value: &str,
     row: CsvRowNumber,
@@ -127,15 +155,13 @@ fn check_entities_and_brackets(
     let no_entities = ENTITY_RE.replace_all(value, "");
     let stripped = TAG_RE.replace_all(&no_entities, "");
 
-    let (sanitized, _) = sanitize_field(value, is_images_field, true);
-    let auto_fix_available = sanitized != value;
-    let fix_preview = if auto_fix_available {
-        Some(sanitized.chars().take(200).collect())
-    } else {
-        None
-    };
+    // Filled on first use: most fields trigger no entity/bracket diagnostic, so
+    // the sanitize pipeline must not run for them.
+    let mut auto_fix: Option<(bool, Option<String>)> = None;
 
     if stripped.contains('<') || stripped.contains('>') {
+        let (auto_fix_available, fix_preview) =
+            cached_auto_fix(&mut auto_fix, value, is_images_field);
         diags.push(
             Diagnostic::new(
                 CODE_FMT_ENTITY_MISSING,
@@ -146,11 +172,13 @@ fn check_entities_and_brackets(
             .with_row(row)
             .with_field(field)
             .with_suggestion("Replace < with &lt; and > with &gt;")
-            .with_auto_fix(auto_fix_available, fix_preview.clone()),
+            .with_auto_fix(auto_fix_available, fix_preview),
         );
     }
 
     if no_entities.contains('&') {
+        let (auto_fix_available, fix_preview) =
+            cached_auto_fix(&mut auto_fix, value, is_images_field);
         diags.push(
             Diagnostic::new(
                 CODE_FMT_AMP_RAW,
@@ -536,6 +564,42 @@ mod tests {
             .find(|d| d.code == CODE_FMT_FIELD_SHIFTED)
             .unwrap();
         assert_eq!(shift_diag.row, Some(2));
+    }
+
+    /// B27a: o `sanitize_field` só roda quando existe diagnóstico que carrega o
+    /// auto-fix. A saída precisa continuar idêntica byte a byte.
+    #[test]
+    fn entity_diagnostics_keep_identical_auto_fix_metadata() {
+        let csv = format!(
+            "{QA_HEADER_CANONICAL}\na < b|R|C|N|I|Ref|Tag\na & b|R|C|N|I|Ref|Tag\na < b & c|R|C|N|I|Ref|Tag\n**negrito** sem entidade|R|C|N|I|Ref|Tag"
+        );
+        let diags = check_csv(&csv, NoteType::Qa, true);
+
+        let lt: Vec<&Diagnostic> = diags
+            .iter()
+            .filter(|d| d.code == CODE_FMT_ENTITY_MISSING)
+            .collect();
+        let amp: Vec<&Diagnostic> = diags
+            .iter()
+            .filter(|d| d.code == CODE_FMT_AMP_RAW)
+            .collect();
+        assert_eq!(lt.len(), 2, "raw '<' in rows 2 and 4 of the fixture");
+        assert_eq!(amp.len(), 2, "raw '&' in rows 3 and 4 of the fixture");
+
+        for d in lt.iter().chain(amp.iter()) {
+            assert!(d.auto_fix_available, "auto-fix must stay available: {d:?}");
+        }
+        assert_eq!(lt[0].fix_preview.as_deref(), Some("a &lt; b"));
+        assert_eq!(amp[0].fix_preview.as_deref(), Some("a &amp; b"));
+        // Field with both problems: the two diagnostics share the same snapshot.
+        let both: Vec<&Diagnostic> = diags.iter().filter(|d| d.row == Some(4)).collect();
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[0].fix_preview, both[1].fix_preview);
+        assert_eq!(both[0].fix_preview.as_deref(), Some("a &lt; b &amp; c"));
+
+        // Markdown-only field: sanitize would change the value, but with no
+        // diagnostic there is nothing to attach it to.
+        assert!(!diags.iter().any(|d| d.row == Some(5)));
     }
 
     #[test]
