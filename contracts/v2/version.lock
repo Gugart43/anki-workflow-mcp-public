@@ -1,0 +1,15 @@
+{
+  "contract_version": "2",
+  "digest_algorithm": "sha256",
+  "digest_input": "sha256 over every *.schema.json of this directory, ordered by filename (code point), each fed as: filename + LF + file bytes + LF",
+  "policy": [
+    "contracts/v2 is generated, never hand-edited: run `just codegen-contracts` (export-schemas + codegen-ts) and commit the diff together with the Rust struct change that caused it.",
+    "contract_version is the major version of this directory; any breaking change to a schema, a manifest entry, or a TypeScript type must bump it and land in a new contracts/vN directory.",
+    "schema_digest is the sha256 of the whole schema set (see digest_input); any single byte of any *.schema.json changes it, so it pins exactly what a consumer of contracts/v2 was built against.",
+    "manifest.json and this lock are produced by the same run as the schemas; apps/anki-workflow-mcp/tests/contract_drift.rs fails when the committed copies diverge from a fresh run, including the digest.",
+    "Consumers pin the digest rather than a hand-written version: a digest change without a contract_version bump is only allowed for additive, non-breaking edits and must be reviewed as such in the diff."
+  ],
+  "producer": "cargo run --locked -p anki-workflow-mcp --bin export-schemas",
+  "schema_count": 26,
+  "schema_digest": "e153e158f43668553bcf84cbe7726f50225ec9e2b1e4e694bfd816d2f72fd7d1"
+}

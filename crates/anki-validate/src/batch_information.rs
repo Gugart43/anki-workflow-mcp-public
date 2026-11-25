@@ -76,7 +76,7 @@ pub struct BatchInformationReview {
 }
 
 /// Count QA records and distinct Cloze indices without rejecting a fixed batch size.
-/// Malformed rows remain visible in structural diagnostics, not silently dropped.
+/// Malformed rows remain visible in structural diagnostics (only), never silently dropped.
 #[must_use]
 pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformationReview {
     let mut cards = Vec::new();
@@ -85,7 +85,15 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
 
     for (row, line) in iter_data_lines(qa_csv) {
         let row = row.get();
-        let fields = split_row(line, 7).cols;
+        let split = split_row(line, 7);
+        if !split.structural_ok {
+            // Uma linha deslocada (por exemplo `|` cru dentro do Enunciado) já
+            // recebe `FMT.COLUMN_COUNT`/`FMT.FIELD_SHIFTED`: ler as colunas por
+            // índice aqui atribuiria o texto de uma coluna ao diagnóstico da
+            // outra (SKIPPED_STRUCTURAL, igual a `checks/csv_structure.py`).
+            continue;
+        }
+        let fields = split.cols;
         let prompt = fields.first().map_or("", String::as_str);
         let answer = fields.get(1).map_or("", String::as_str);
         let notes = fields.get(3).map_or("", String::as_str);
@@ -126,7 +134,12 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
 
     for (row, line) in iter_data_lines(cloze_csv) {
         let row = row.get();
-        let fields = split_row(line, 6).cols;
+        let split = split_row(line, 6);
+        if !split.structural_ok {
+            // Mesmo motivo do laço QA: o deslocamento já é reportado por `check_csv`.
+            continue;
+        }
+        let fields = split.cols;
         let sentence = fields.first().map_or("", String::as_str);
         let notes = fields.get(1).map_or("", String::as_str);
         let indices = count_cloze_indices(sentence);
@@ -134,6 +147,9 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
         issues.extend(check_hints(sentence, Some(row), Some("Sentença")));
         issues.extend(check_notes(notes, "", Some(row)));
         let spans = find_cloze_spans(sentence);
+        // Invariantes da linha: não dependem do índice cloze, então são
+        // calculados uma única vez por linha (antes: uma vez por índice).
+        let notes_visible_chars = visible_char_count(notes);
         // Preserve the legacy count for malformed no-index Cloze notes, but
         // expose an empty target and its diagnostics rather than inventing one.
         if indices.is_empty() {
@@ -149,7 +165,7 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
                 visible_context: Some(sentence.to_owned()),
                 visible_context_chars: Some(visible_char_count(sentence)),
                 prompt_visible_chars: visible_char_count(sentence),
-                notes_visible_chars: visible_char_count(notes),
+                notes_visible_chars,
                 semantic_review_required: true,
                 diagnostics: {
                     let mut diagnostics = issues;
@@ -168,6 +184,7 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
             });
             continue;
         }
+        let prompt_visible_chars = visible_char_count(&crate::qa::strip_cloze_markers(sentence));
         for index in indices {
             let targets: Vec<&str> = spans
                 .iter()
@@ -181,16 +198,21 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
                 .flat_map(|target| extract_candidate_items(target))
                 .collect();
             let candidate_item_count = candidate_items.len();
-            let mut card_issues: Vec<Diagnostic> = issues
-                .iter()
-                .filter(|d| {
-                    // Note-global checks belong to every view, but a length
-                    // warning about cN must not mark unrelated cards.
-                    !matches!(d.code.as_str(), "CLOZE.TOO_LONG" | "CARD.TOO_LONG_DELETION")
-                        || d.message.starts_with(&format!("c{index}:"))
-                })
-                .cloned()
-                .collect();
+            let index_prefix = format!("c{index}:");
+            // Note-global checks belong to every view, but a length warning about
+            // cN must not mark unrelated cards. Cloning only happens when the
+            // note actually carries diagnostics.
+            let mut card_issues: Vec<Diagnostic> = Vec::new();
+            for diag in &issues {
+                if matches!(
+                    diag.code.as_str(),
+                    "CLOZE.TOO_LONG" | "CARD.TOO_LONG_DELETION"
+                ) && !diag.message.starts_with(&index_prefix)
+                {
+                    continue;
+                }
+                card_issues.push(diag.clone());
+            }
             if let Some(diag) = check_cloze_target_restatement(notes, &retrieved_target, index, row)
             {
                 card_issues.push(diag);
@@ -219,8 +241,8 @@ pub fn review_batch_information(qa_csv: &str, cloze_csv: &str) -> BatchInformati
                 hidden_list_signal: candidate_item_count >= 3,
                 visible_context_chars: Some(visible_char_count(&visible_context)),
                 visible_context: Some(visible_context),
-                prompt_visible_chars: visible_char_count(&crate::qa::strip_cloze_markers(sentence)),
-                notes_visible_chars: visible_char_count(notes),
+                prompt_visible_chars,
+                notes_visible_chars,
                 semantic_review_required: true,
                 diagnostics: card_issues,
             });
@@ -253,12 +275,70 @@ mod tests {
     }
 
     #[test]
-    fn structural_diagnostics_are_reported_without_dropping_the_row() {
+    fn structural_diagnostics_are_reported_without_a_semantic_review_slot() {
         let qa = format!("{}\npergunta|resposta", anki_domain::QA_HEADER_CANONICAL);
         let result = review_batch_information(&qa, anki_domain::CLOZE_HEADER_CANONICAL);
+        // A linha deslocada continua visível nos diagnósticos estruturais, mas
+        // não vira cartão: sem colunas confiáveis não há revisão semântica possível.
+        assert_eq!(result.total_cards, 0);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "FMT.COLUMN_COUNT" && d.row == Some(2))
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.code.as_str() == "FMT.FIELD_SHIFTED" && d.row == Some(2))
+        );
+    }
+
+    #[test]
+    fn shifted_qa_row_reports_only_structural_diagnostics() {
+        // `|` cru dentro do Enunciado => 8 colunas. Antes da correção a leitura
+        // por índice atribuía ao campo "Enunciado" o texto da coluna Resposta.
+        let qa = format!(
+            "{}\nQual o diagnóstico do paciente?|Cardiologia sintética|Resposta curta|Geral|Notas|Imagens|Manual Sintético (2026), Seção 1|Tag",
+            anki_domain::QA_HEADER_CANONICAL
+        );
+        let result = review_batch_information(&qa, anki_domain::CLOZE_HEADER_CANONICAL);
+        assert_eq!(result.total_cards, 0, "shifted row must not become a card");
+        let codes: Vec<&str> = result.diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(codes.len(), 2, "only structural diagnostics: {codes:?}");
+        assert!(codes.contains(&"FMT.COLUMN_COUNT"));
+        assert!(codes.contains(&"FMT.FIELD_SHIFTED"));
+        assert!(!codes.contains(&"QA.CONTEXT_WARN"));
+    }
+
+    #[test]
+    fn shifted_row_does_not_poison_the_next_well_formed_row() {
+        let qa = format!(
+            "{}\nQual o diagnóstico?|Cardiologia|Resposta|Campo de Estudo|Notas com quatro palavras|Imagens|Manual Sintético (2026), Seção 1|Tag\nEm adulto com síndrome sintética, qual o marcador?|Marcador alfa|Campo de Estudo|Nota|Imagens|Manual Sintético (2026), Seção 2|Tag",
+            anki_domain::QA_HEADER_CANONICAL
+        );
+        let result = review_batch_information(&qa, anki_domain::CLOZE_HEADER_CANONICAL);
         assert_eq!(result.total_cards, 1);
-        assert!(!result.diagnostics.is_empty());
-        assert_eq!(result.cards[0].source_row, 2);
+        let card = &result.cards[0];
+        assert_eq!(card.source_row, 3);
+        // As colunas do cartão bem formado seguem os valores reais da linha 3.
+        assert_eq!(card.retrieved_target, "Marcador alfa");
+        assert_eq!(card.notes_visible_chars, "Nota".chars().count());
+    }
+
+    #[test]
+    fn shifted_cloze_row_reports_only_structural_diagnostics() {
+        let cloze = format!(
+            "{}\nSentença com | cru {{{{c1::alfa}}}}|Notas|Campo de Estudo|Imagens|Manual Sintético (2026), Seção 1|Tag",
+            anki_domain::CLOZE_HEADER_CANONICAL
+        );
+        let result = review_batch_information(anki_domain::QA_HEADER_CANONICAL, &cloze);
+        assert_eq!(result.total_cards, 0);
+        let codes: Vec<&str> = result.diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert_eq!(codes.len(), 2, "only structural diagnostics: {codes:?}");
+        assert!(codes.contains(&"FMT.COLUMN_COUNT"));
+        assert!(codes.contains(&"FMT.FIELD_SHIFTED"));
     }
 
     #[test]

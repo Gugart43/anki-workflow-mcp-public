@@ -25,6 +25,10 @@ from dataclasses import dataclass
 # ── Tags ─────────────────────────────────────────────────────────────────────
 
 #: Allowed in any text field (includes table caption and tfoot for TableSpec).
+#:
+#: Strict mirror of ``crates/anki-validate/src/vocab.rs::ALLOWED_TAGS`` (50 tags).
+#: Equality of both sets is asserted by ``tests/test_vocab.py``; a tag that Rust
+#: accepts and Python rejects is a false ``FMT.TAG_FORBIDDEN`` (CRITICAL).
 ALLOWED_TAGS: frozenset[str] = frozenset(
     {
         "b",
@@ -55,6 +59,32 @@ ALLOWED_TAGS: frozenset[str] = frozenset(
         "ul",
         "ol",
         "li",
+        # ── Semântica v2 (espelho de crates/anki-validate/src/vocab.rs) ──
+        # Ênfase e abreviações em linha
+        "abbr",
+        "cite",
+        "del",
+        "ins",
+        "kbd",
+        # Blocos: seções, títulos, par chave-valor, detalhes colapsáveis, rodapé
+        "section",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "dl",
+        "dt",
+        "dd",
+        "details",
+        "summary",
+        # Pré-formatado e tabela por colunas (void: col, wbr)
+        "pre",
+        "col",
+        "colgroup",
+        "wbr",
     }
 )
 
@@ -62,6 +92,10 @@ ALLOWED_TAGS: frozenset[str] = frozenset(
 IMAGES_ONLY_TAGS: frozenset[str] = frozenset({"img", "figure", "figcaption"})
 
 #: Paired (non-void) tags tracked for matching open/close.
+#:
+#: Strict mirror of ``crates/anki-validate/src/vocab.rs::PAIRED_TAGS`` (48 tags):
+#: the Rust oracle emits ``FMT.TAG_UNCLOSED`` for every one of them, so a missing
+#: entry here silences the same diagnostic on the Python side.
 PAIRED_TAGS: frozenset[str] = frozenset(
     {
         "b",
@@ -92,11 +126,32 @@ PAIRED_TAGS: frozenset[str] = frozenset(
         "li",
         "figure",
         "figcaption",
+        # ── Semântica v2 (espelho de crates/anki-validate/src/vocab.rs) ──
+        "abbr",
+        "cite",
+        "del",
+        "ins",
+        "kbd",
+        "section",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "dl",
+        "dt",
+        "dd",
+        "details",
+        "summary",
+        "pre",
+        "colgroup",
     }
 )
 
-#: Void elements — never require a closing tag.
-VOID_TAGS: frozenset[str] = frozenset({"br", "hr", "img"})
+#: Void elements — never require a closing tag (also never tracked as paired).
+VOID_TAGS: frozenset[str] = frozenset({"br", "hr", "img", "col", "wbr"})
 
 # ── Attributes ───────────────────────────────────────────────────────────────
 
@@ -128,6 +183,49 @@ CLASS_VOCABULARY: dict[str, frozenset[str]] = {
     "nativo": frozenset({"media", "hints", "style-notas", "style-ref"}),
     # Mídia e figuras AnkiMBR (inclui suporte a figuras e quadros extraídos)
     "midia": frozenset({"anki-figure", "anki-table-figure", "fig-title", "fig-context"}),
+    # ── Blocos semânticos v2 (espelho de crates/anki-validate/src/vocab.rs) ──
+    # Estrutura de nota: seções, pares chave-valor, detalhes colapsáveis e fontes
+    "blocos": frozenset(
+        {
+            "anki-note",
+            "anki-note-section",
+            "anki-kv",
+            "anki-kv-section",
+            "anki-detail",
+            "anki-details",
+            "anki-sources",
+        }
+    ),
+    # Listas e sequências operacionais
+    "sequencias": frozenset({"anki-list", "anki-steps", "anki-flow"}),
+    # Callouts v2 e modificadores de intenção
+    "callouts-v2": frozenset(
+        {"anki-callout", "anki-callout--trap", "anki-callout--pearl", "anki-callout--diff"}
+    ),
+    # Tabela semântica
+    "tabela-v2": frozenset({"anki-table"}),
+    # Detalhes colapsáveis de hints (native <details>/<summary>)
+    "colapsavel": frozenset({"hint-details", "hint-summary"}),
+    # Realce e estado de cloze em linha
+    "realce-v2": frozenset({"destaque", "cloze", "cloze-inactive"}),
+    # Classes AMBR do stylesheet compartilhado
+    "ambr": frozenset(
+        {
+            "ambr-accent",
+            "ambr-badge",
+            "ambr-callout",
+            "ambr-card",
+            "ambr-details",
+            "ambr-muted",
+            "ambr-note",
+            "ambr-pill",
+            "ambr-section",
+            "ambr-summary",
+            "ambr-table",
+            "ambr-table-wrap",
+            "ambr-tag",
+        }
+    ),
 }
 
 #: Flat lookup used by the validator.

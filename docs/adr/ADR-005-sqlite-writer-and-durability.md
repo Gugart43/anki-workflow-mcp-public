@@ -1,8 +1,9 @@
 # ADR-005: Arquitetura de Escrita em SQLite, Concorrência, Idempotência e Durabilidade
 
-- **Status:** Proposed / Target Architecture (Not Implemented)
-- **Status de Implementação:** Workspace Rust não possui dependência SQLite; persistência atual roda no Python via `filelock`.
+- **Status:** Superseded by ADR-007
+- **Status de Implementação:** Parcialmente superado. `rusqlite 0.42` existe no workspace (`apps/anki-workflow-mcp/Cargo.toml:29`) e é usado **exclusivamente como espelho de leitura** da coleção Anki em `sync-decks` (`apps/anki-workflow-mcp/src/cli/sync_decks.rs:14-15,285-391`): snapshot online via Backup API e colação PT-BR `unicase`. Não existe `anki_workflow.db`, tabela `operations`, `SingleWriter`, `BEGIN IMMEDIATE` nem lease/`owner_id` em `apps/`, `crates/` ou `src/`. A durabilidade e a idempotência que esta ADR atribuía ao SQLite são entregues hoje por ledger JSON + swap atômico em `apps/anki-workflow-mcp/src/export.rs` (ver ADR-007). O conflito de payload é reportado como `EXPORT.BATCH_CONFLICT` — o desenho original previa um código do namespace `STATE.*` que nunca foi registrado no catálogo.
 - **Data:** 2026-11-14
+- **Substituída em:** 2026-11-15 por ADR-007
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-006, Seções 1.3, 3.1 e 4.2 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-02, P-03, P-17, P-23
 
@@ -94,8 +95,8 @@ ON operations(operation_type, request_payload_digest);
 #### Regras de Processamento de Idempotência:
 1. **Replay Idêntico:** Quando uma requisição chega com um `operation_id` já existente:
    - Se `status = 'COMMITTED'` e o `request_payload_digest` for rigorosamente idêntico ao registrado: o servidor **não reexecuta** a operação. Retorna instantaneamente a resposta original armazenada referenciada por `result_ref` e validada por `result_digest`.
-2. **Conflito de Payload (`STATE.CONFLICT`):**
-   - Se `operation_id` já existir no banco, mas com um `request_payload_digest` divergente da requisição atual: a operação é rejeitada imediatamente com código de erro estruturado `STATE.CONFLICT`, impedindo mutações sobrepostas sob o mesmo identificador de operação.
+2. **Conflito de Payload (`EXPORT.BATCH_CONFLICT`):**
+   - Se `operation_id` já existir no banco, mas com um `request_payload_digest` divergente da requisição atual: a operação é rejeitada imediatamente com código de erro estruturado `EXPORT.BATCH_CONFLICT`, impedindo mutações sobrepostas sob o mesmo identificador de operação. (O código do namespace `STATE.*` citado no desenho original para este caso nunca foi registrado no catálogo de diagnósticos.)
 3. **Operação em Execução (`PREPARED`):**
    - Se `operation_id` constar como `PREPARED` e o lease estiver ativo, retorna erro de contenção transitória orientando o cliente a aguardar a conclusão.
 
@@ -144,7 +145,7 @@ Para permitir a recuperação após falhas catastróficas sem criar riscos de co
 
 1. **Paridade e Idempotência:**
    - Teste automatizado validando replay idêntico com retorno do mesmo digest e sem mutação adicional no banco.
-   - Teste de colisão injetando o mesmo `operation_id` com payload alterado, confirmando o lançamento do erro `STATE.CONFLICT`.
+   - Teste de colisão injetando o mesmo `operation_id` com payload alterado, confirmando o lançamento do erro `EXPORT.BATCH_CONFLICT` (na implementação vigente do ledger JSON; ver ADR-007).
 2. **Concorrência e Lease Multi-Processo:**
    - Teste simulando dois processos concorrentes (`owner_A` e `owner_B`), comprovando que `owner_B` não consegue adotar nem abortar uma transação ativa com lease válido pertencente a `owner_A`.
    - Teste de reconciliador com avanço temporal forçado, comprovando que transações órfãs com lease vencido são revertidas via CAS com sucesso.

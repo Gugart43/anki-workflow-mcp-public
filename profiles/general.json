@@ -16,7 +16,7 @@
     "forbid_metadata_headers": true,
     "forbid_verbatim_answer_restatement": true,
     "forbid_exam_only_mentions": false,
-    "preferred_list_format": "• <b>Tópico:</b> Explicação concisa."
+    "preferred_list_format": "<section class=\"anki-list\">/<section class=\"anki-steps\"> com <li><b>Tópico:</b> Explicação concisa.</li> (alternativa legada em texto puro: '• <b>Tópico:</b> Explicação concisa.')"
   },
   "editorial_checklist": [
     {

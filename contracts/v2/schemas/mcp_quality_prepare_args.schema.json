@@ -13,6 +13,7 @@
       "properties": {
         "cloze_index": {
           "default": null,
+          "description": "1-based Cloze deletion index (`cN`) inside the sentence; required with\n`>= 1` for `note_type: CL` and must be absent/null for `note_type: QA`.",
           "format": "int64",
           "minimum": 1,
           "type": [
@@ -36,6 +37,7 @@
           "type": "array"
         },
         "source_row": {
+          "description": "1-based CSV data row of the retrieval, counting the header row; use `>= 2`\n(row 1 is the header). Rows beyond the compiled batch cannot bind any card.",
           "format": "int64",
           "minimum": 2,
           "type": "integer"
@@ -56,6 +58,7 @@
           "type": "string"
         },
         "quote": {
+          "description": "Excerpt copied verbatim from the referenced `sources[].text`; it must be an exact\nsubstring of that source text (no paraphrasing, normalization, or ellipsis).",
           "type": "string"
         },
         "scope": {

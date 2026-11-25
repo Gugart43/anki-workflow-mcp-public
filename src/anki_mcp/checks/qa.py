@@ -68,6 +68,22 @@ _APPOSITIVE_RE = re.compile(
 )
 
 
+# Evidência estrutural que sustenta QA.CARDINALITY (Onda 2, B25).
+#
+# Espelha `qa::EnumerationEvidence::is_explicit` no Rust: só marcador ou separador
+# enumerativo EXPLÍCITO conta. `comma_enumeration` e `conjunction_e` ficam de fora de
+# propósito — vírgula de aposição ("Dor retroesternal, em aperto, com irradiação para o
+# braço esquerdo") descreve um único conceito, não uma lista.
+_EXPLICIT_ENUMERATION_EVIDENCE = frozenset(
+    {"html_li", "html_br", "newline", "semicolon", "bullet_marker", "numbered_list"}
+)
+
+
+def _has_explicit_enumerative_marker(evidence: list[str]) -> bool:
+    """True quando a extração de itens viu marcador/separador enumerativo explícito."""
+    return any(item in _EXPLICIT_ENUMERATION_EVIDENCE for item in evidence)
+
+
 def _count_items(answer: str) -> int:
     """Heuristic item count in an answer field.
 
@@ -147,9 +163,10 @@ def check_qa(
 
     # ── QA.CARDINALITY ────────────────────────────────────────────────────────
     # Shared structural candidate extraction (keeps triage _count_items untouched).
-    candidate_items, _ = extract_candidate_items(resposta)
+    candidate_items, evidence = extract_candidate_items(resposta)
     item_count = len(candidate_items)
-    if item_count >= 3:
+    # ≥3 itens E marcador enumerativo explícito (Onda 2, B25).
+    if item_count >= 3 and _has_explicit_enumerative_marker(evidence):
         diags.append(
             Diagnostic.from_code(
                 "QA.CARDINALITY",

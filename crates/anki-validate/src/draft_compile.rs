@@ -35,43 +35,294 @@ fn has_unsafe_value(value: &Value) -> bool {
     }
 }
 
+/// `<código>: <mensagem com o valor medido>` para uma violação de limite de campo HTML.
+fn field_limit_error(text: &str) -> Option<String> {
+    crate::html_security::html_field_limit_violation(text).map(|code| {
+        format!(
+            "{code}: {}",
+            crate::html_security::html_field_limit_message(code, text)
+        )
+    })
+}
+
+/// Primeira violação de LIMITE de campo HTML (`HTML.FIELD_TOO_LARGE` / `HTML.NESTING_TOO_DEEP`)
+/// na árvore, já formatada como `<código>: <mensagem com o valor medido>`.
+///
+/// O canal de erro deste compilador é `Vec<String>` (superfície pública, entregue como
+/// `COMPILE.INVALID_DRAFT`), então o código específico viaja dentro da mensagem: sem isto um
+/// draft legítimo e apenas grande era reportado como "Unsafe HTML attributes or active content",
+/// o que é falso. Fail-closed: continua rejeitando.
+fn field_limit_violation(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => field_limit_error(text),
+        Value::Array(items) => items.iter().find_map(field_limit_violation),
+        Value::Object(items) => items.values().find_map(field_limit_violation),
+        _ => None,
+    }
+}
+
+/// Primeira violação de limite entre campos já renderizados (linhas de CSV), formatada igual.
+fn field_limit_violation_in_row<'a, I>(fields: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a String>,
+{
+    fields
+        .into_iter()
+        .find_map(|field| field_limit_error(field))
+}
+
+/// Chaves legadas aceitas pelo adaptador de notas (`legacy_adapter`).
+const LEGACY_NOTES_KEYS: [&str; 6] = [
+    "fisiopatologia",
+    "raciocinio_clinico",
+    "armadilhas_diferenciais",
+    "correlacao_visual",
+    "tabela",
+    "texto_livre",
+];
+
+/// Compila drafts tolerantes (`normalize_draft`) com `CompileMode::LegacyCompat`.
 pub fn compile_drafts(
     drafts: &[Value],
     auto_renumber_cloze: bool,
     auto_purge_id_leaks: bool,
     default_campo_estudo: &str,
 ) -> Result<Value, String> {
-    compile_drafts_inner(
+    compile_drafts_with_mode(
         drafts,
         auto_renumber_cloze,
         auto_purge_id_leaks,
         default_campo_estudo,
         false,
+        CompileMode::LegacyCompat,
     )
 }
 
+/// Compila drafts estruturais (`normalize_draft_strict`) com `CompileMode::LegacyCompat`.
 pub fn compile_drafts_strict(
     drafts: &[Value],
     auto_renumber_cloze: bool,
     auto_purge_id_leaks: bool,
     default_campo_estudo: &str,
 ) -> Result<Value, String> {
-    compile_drafts_inner(
+    compile_drafts_with_mode(
         drafts,
         auto_renumber_cloze,
         auto_purge_id_leaks,
         default_campo_estudo,
         true,
+        CompileMode::LegacyCompat,
     )
 }
 
+/// Compila drafts controlando separadamente o rigor estrutural do draft
+/// (`strict_drafts`) e o modo de compilação das notas adicionais (`compile_mode`).
+///
+/// `compile_mode = CompileMode::StrictV2` torna alcançável o contrato estrito do
+/// `NoteDocument` (campos legados populados são rejeitados); `LegacyCompat`
+/// preserva o comportamento histórico do compilador único.
+pub fn compile_drafts_with_mode(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+    strict_drafts: bool,
+    compile_mode: CompileMode,
+) -> Result<Value, String> {
+    compile_drafts_inner(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        strict_drafts,
+        compile_mode,
+    )
+}
+
+/// Compila um lote de drafts tolerantes (`normalize_draft`) devolvendo o
+/// resultado **parcial** em vez de descartar o trabalho dos drafts válidos.
+///
+/// O retorno é sempre um `Value` (nunca `Result`): os drafts que compilam
+/// produzem linhas e estatísticas, e os que falham produzem entradas em
+/// `errors`. Chaves devolvidas:
+///
+/// - `qa_csv` — CSV QA canônico com as linhas dos drafts compilados com sucesso;
+///   traz somente o cabeçalho quando nenhum draft QA compila.
+/// - `cloze_csv` — CSV Cloze canônico com as linhas dos drafts compilados com
+///   sucesso; traz somente o cabeçalho quando nenhum draft Cloze compila.
+/// - `stats` — mesmas chaves do payload de sucesso (`total_drafts`, `qa_count`,
+///   `cloze_count`, `renumbered_cloze`, `purged_id_leaks`, `illustrated_cards`,
+///   `tables_rendered`). `total_drafts` é o tamanho do lote tentado, portanto
+///   `stats.qa_count + stats.cloze_count` é o número de drafts efetivamente
+///   compilados e `stats.total_drafts - (qa_count + cloze_count)` é o número de
+///   falhas.
+/// - `errors` — erros por draft em ordem de índice, cada um no formato
+///   `drafts[<índice>]: <motivo>`. `errors.join("; ")` reproduz exatamente a
+///   mensagem que o contrato histórico devolvia como erro.
+/// - `partial` — `true` quando `errors` não está vazio, ou seja, quando o lote
+///   foi apenas parcialmente compilado; `false` em lote 100% válido.
+pub fn compile_drafts_partial(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+) -> Value {
+    compile_drafts_partial_with_mode(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        false,
+        CompileMode::LegacyCompat,
+    )
+}
+
+/// Versão de [`compile_drafts_partial`] que controla o rigor estrutural dos
+/// drafts (`strict_drafts`, ver `normalize_draft_strict`) e o modo do compilador
+/// de notas (`compile_mode`).
+///
+/// O payload é o mesmo descrito em [`compile_drafts_partial`]; o resultado é
+/// parcial (`partial: true`) quando qualquer draft falha na normalização, no
+/// compilador de notas, na renderização de figuras ou na checagem de HTML
+/// inseguro.
+pub fn compile_drafts_partial_with_mode(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+    strict_drafts: bool,
+    compile_mode: CompileMode,
+) -> Value {
+    compile_batch_outcome(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        strict_drafts,
+        compile_mode,
+    )
+    .partial_payload()
+}
+
+/// `true` quando o valor de uma chave legada não carrega conteúdo algum.
+fn is_empty_notes_value(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(text) => text.trim().is_empty(),
+        Value::Array(items) => items.is_empty(),
+        Value::Object(map) => map.is_empty(),
+        Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+/// Remove chaves legadas sem conteúdo antes de compilar em `CompileMode::StrictV2`.
+///
+/// O draft normalizado materializa *todas* as chaves legadas (`fisiopatologia`,
+/// `texto_livre`, ...) como `null` mesmo quando o cliente não as enviou. O
+/// adaptador estrito rejeita a mera presença da chave, então sem esta poda uma
+/// nota canônica — ou a ausência de notas — seria recusada por ruído de
+/// normalização. Chaves legadas populadas continuam sendo rejeitadas.
+fn prune_empty_legacy_notes(notes: &Value) -> Value {
+    let Value::Object(map) = notes else {
+        return notes.clone();
+    };
+
+    let mut pruned = map.clone();
+    for key in LEGACY_NOTES_KEYS {
+        if matches!(pruned.get(key), Some(value) if is_empty_notes_value(value)) {
+            pruned.remove(key);
+        }
+    }
+    Value::Object(pruned)
+}
+
+/// Resultado bruto de uma compilação de lote, antes da decisão entre o contrato
+/// histórico ("tudo ou nada", via [`compile_drafts_inner`]) e o contrato parcial
+/// (via [`compile_drafts_partial_with_mode`]).
+///
+/// A compilação de um draft nunca interrompe o lote: cada draft que falha
+/// acrescenta uma entrada em `errors` e os demais seguem sendo compilados. Os
+/// dois payloads abaixo diferem apenas na forma de reportar essa falha.
+struct BatchOutcome {
+    /// CSV QA contendo somente as linhas dos drafts que compilaram com sucesso.
+    qa_csv: String,
+    /// CSV Cloze contendo somente as linhas dos drafts que compilaram com sucesso.
+    cloze_csv: String,
+    /// Estatísticas do lote: `total_drafts` conta os drafts tentados, enquanto as
+    /// contagens de sucesso (`qa_count`, `cloze_count`) contam apenas os compilados.
+    stats: Value,
+    /// Erros por draft no formato `drafts[<índice>]: <motivo>`, na ordem dos drafts.
+    errors: Vec<String>,
+}
+
+impl BatchOutcome {
+    /// Payload histórico de sucesso: `qa_csv`, `cloze_csv` e `stats`, sem
+    /// nenhuma chave adicional. Mantido byte-idêntico ao contrato anterior para
+    /// não alterar o resultado de `cards_compile_drafts` quando todo o lote
+    /// compila.
+    fn success_payload(&self) -> Value {
+        json!({
+            "qa_csv": self.qa_csv,
+            "cloze_csv": self.cloze_csv,
+            "stats": self.stats,
+        })
+    }
+
+    /// Payload parcial: o trabalho dos drafts válidos mais o relato das falhas.
+    ///
+    /// Chaves:
+    /// - `qa_csv`: linhas QA compiladas com sucesso (só o cabeçalho se nenhuma).
+    /// - `cloze_csv`: linhas Cloze compiladas com sucesso (só o cabeçalho se nenhuma).
+    /// - `stats`: mesmas estatísticas do payload de sucesso; `total_drafts` é o
+    ///   total tentado e `qa_count`/`cloze_count` somam apenas os compilados.
+    /// - `errors`: lista de erros por draft em ordem de índice; `errors.join("; ")`
+    ///   reproduz exatamente a mensagem do contrato histórico de erro.
+    /// - `partial`: `true` sempre que `errors` não está vazio, isto é, sempre que o
+    ///   lote foi apenas parcialmente compilado (`false` em lote 100% válido).
+    fn partial_payload(&self) -> Value {
+        json!({
+            "qa_csv": self.qa_csv,
+            "cloze_csv": self.cloze_csv,
+            "stats": self.stats,
+            "errors": self.errors,
+            "partial": !self.errors.is_empty(),
+        })
+    }
+}
+
+/// Contrato histórico do compilador de lote: qualquer draft inválido descarta o
+/// lote inteiro e vira `Err` com a mensagem agregada.
 fn compile_drafts_inner(
     drafts: &[Value],
     auto_renumber_cloze: bool,
     auto_purge_id_leaks: bool,
     default_campo_estudo: &str,
     strict: bool,
+    compile_mode: CompileMode,
 ) -> Result<Value, String> {
+    let outcome = compile_batch_outcome(
+        drafts,
+        auto_renumber_cloze,
+        auto_purge_id_leaks,
+        default_campo_estudo,
+        strict,
+        compile_mode,
+    );
+    if !outcome.errors.is_empty() {
+        return Err(outcome.errors.join("; "));
+    }
+    Ok(outcome.success_payload())
+}
+
+/// Compila o lote inteiro preservando o trabalho dos drafts válidos.
+fn compile_batch_outcome(
+    drafts: &[Value],
+    auto_renumber_cloze: bool,
+    auto_purge_id_leaks: bool,
+    default_campo_estudo: &str,
+    strict: bool,
+    compile_mode: CompileMode,
+) -> BatchOutcome {
     let mut qa_rows: Vec<Vec<String>> = Vec::new();
     let mut cloze_rows: Vec<Vec<String>> = Vec::new();
 
@@ -98,6 +349,12 @@ fn compile_drafts_inner(
                 continue;
             }
         };
+        // Limite de campo tem diagnóstico PRÓPRIO (fail-closed): antes, código descartado e
+        // campo legítimo de 17.007 bytes saía como "Unsafe HTML attributes".
+        if let Some(limit_error) = field_limit_violation(&card) {
+            errors.push(format!("drafts[{idx}]: {limit_error}"));
+            continue;
+        }
         if has_unsafe_value(&card) {
             errors.push(format!(
                 "drafts[{idx}]: Unsafe HTML attributes or active content in draft"
@@ -160,13 +417,20 @@ fn compile_drafts_inner(
         let mut draft_errors: Vec<String> = Vec::new();
 
         // 3. Format 'Notas Adicionais' via single compiler path (F2 / legacy_adapter)
+        let pruned_notes = match compile_mode {
+            CompileMode::StrictV2 => obj.get("notas_adicionais").map(prune_empty_legacy_notes),
+            CompileMode::LegacyCompat => None,
+        };
+        let notas_adicionais = pruned_notes
+            .as_ref()
+            .or_else(|| obj.get("notas_adicionais"));
         let notes_input = DraftNotesInput {
-            notas_adicionais: obj.get("notas_adicionais"),
+            notas_adicionais,
             tabela_notas: obj.get("tabela_notas"),
             tabelas_notas: obj.get("tabelas_notas"),
             figuras_notas: obj.get("figuras_notas"),
         };
-        let compiled_notes = match compile_extra_notes(&notes_input, CompileMode::LegacyCompat) {
+        let compiled_notes = match compile_extra_notes(&notes_input, compile_mode) {
             Ok(notes) => notes,
             Err(err) => {
                 draft_errors.push(format!("drafts[{idx}]: {err}"));
@@ -331,6 +595,10 @@ fn compile_drafts_inner(
                 clean_refs,
                 tags_str,
             ];
+            if let Some(limit_error) = field_limit_violation_in_row(&row) {
+                errors.push(format!("drafts[{idx}]: {limit_error}"));
+                continue;
+            }
             if row
                 .iter()
                 .any(|field| crate::html_security::has_unsafe_html(field))
@@ -355,6 +623,10 @@ fn compile_drafts_inner(
                 clean_refs,
                 tags_str,
             ];
+            if let Some(limit_error) = field_limit_violation_in_row(&row) {
+                errors.push(format!("drafts[{idx}]: {limit_error}"));
+                continue;
+            }
             if row
                 .iter()
                 .any(|field| crate::html_security::has_unsafe_html(field))
@@ -369,25 +641,25 @@ fn compile_drafts_inner(
         }
     }
 
-    if !errors.is_empty() {
-        return Err(errors.join("; "));
-    }
-
     let qa_csv = write_csv(&QA_FIELDS, &qa_rows);
     let cloze_csv = write_csv(&CLOZE_FIELDS, &cloze_rows);
-    if qa_rows
+    if let Some(limit_error) =
+        field_limit_violation_in_row(qa_rows.iter().chain(&cloze_rows).flatten())
+    {
+        errors.push(limit_error);
+    } else if qa_rows
         .iter()
         .chain(&cloze_rows)
         .flatten()
         .any(|field| crate::html_security::has_unsafe_html(field))
     {
-        return Err("Unsafe HTML attributes or active content in compiled draft".to_owned());
+        errors.push("Unsafe HTML attributes or active content in compiled draft".to_owned());
     }
 
-    Ok(json!({
-        "qa_csv": qa_csv,
-        "cloze_csv": cloze_csv,
-        "stats": {
+    BatchOutcome {
+        qa_csv,
+        cloze_csv,
+        stats: json!({
             "total_drafts": total_drafts,
             "qa_count": qa_count,
             "cloze_count": cloze_count,
@@ -395,8 +667,9 @@ fn compile_drafts_inner(
             "purged_id_leaks": purged_id_leaks,
             "illustrated_cards": illustrated_cards,
             "tables_rendered": tables_rendered,
-        }
-    }))
+        }),
+        errors,
+    }
 }
 
 #[cfg(test)]

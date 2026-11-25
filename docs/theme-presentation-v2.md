@@ -150,7 +150,7 @@ Servidor Node.js baseado em `@modelcontextprotocol/server` e `@modelcontextproto
 
 Os comandos descritos abaixo são fornecidos como diretriz formal de execução por pipelines de integração contínua (CI) e testes manuais da camada de apresentação.
 
-> **NOTA DE CONFORMIDADE:** Os comandos abaixo foram executados nesta máquina e o resultado real de cada um está em `docs/wave2-acceptance.md` (§2).
+> **NOTA DE CONFORMIDADE:** Os comandos abaixo foram executados nesta máquina e o resultado real de cada um está em [`docs/migration/wave2-acceptance.md`](migration/wave2-acceptance.md) (§2).
 
 ### 7.1. Verificação do Servidor TypeScript de Visualização
 ```bash

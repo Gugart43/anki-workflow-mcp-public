@@ -24,6 +24,11 @@
     "receipt_hash": {
       "type": "string"
     },
+    "recovered_from_disk": {
+      "default": false,
+      "description": "`true` only when the ledger record was recreated from files already present on disk\n(crash between swap and ledger write), i.e. the export was adopted, not replayed.",
+      "type": "boolean"
+    },
     "root_mirror_written": {
       "type": "boolean"
     },

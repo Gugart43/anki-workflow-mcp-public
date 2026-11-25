@@ -23,7 +23,7 @@ Para integrar com clientes compatíveis com o Model Context Protocol (como Claud
 }
 ```
 
-> **Aviso Importante — Subcomando `serve` Obrigatório:** O executável Rust é um utilitário CLI multifuncional (`serve`, `--version`, `build-info`, `health`, `oracle`). Se o argumento `serve` for omitido na configuração do cliente MCP, o processo encerrará com código de erro 2 e imprimirá a sintaxe de uso em `stderr`, impedindo a conexão JSON-RPC.
+> **Aviso Importante — Subcomando `serve` Obrigatório:** O executável Rust é um utilitário CLI multifuncional (`serve`, `sync-media`, `sync-decks`, `version`, `build-info`, `health`, `oracle`). Se o argumento `serve` for omitido na configuração do cliente MCP, o processo encerrará com código de erro 2 e imprimirá a sintaxe de uso em `stderr`, impedindo a conexão JSON-RPC.
 
 ### Desambiguação de Executáveis no PATH
 

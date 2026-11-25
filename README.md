@@ -5,8 +5,8 @@
 Camada de validação, compilação e controle de qualidade para geração de flashcards Anki: **o LLM escreve; o servidor verifica estrutura, avalia fidelidade e registra**. Compatível com notas QA e Cloze e as convenções de apresentação estrutural AnkiMBR. Templates visuais, arquivos de mídia e coleções pessoais não são distribuídos neste repositório.
 
 O projeto opera sob uma arquitetura de transição com Rust como única autoridade de produção:
-1. **Núcleo primário Rust:** o servidor MCP expõe 7 ferramentas MCP (`generation_contract_get`, `quality_prepare`, `quality_evaluate`, `review_batch_information`, `cards_compile_drafts`, `batch_patch_draft` e `export_reviewed_files`): seis operações puras em memória e `export_reviewed_files` para escrita local explícita. Além disso, disponibiliza subcomandos CLI nativos (`serve`, `validate`, `sync-decks` e `sync-media`) e o binário auxiliar `export-schemas`. Rust é a única autoridade de domínio e segurança HTML5.
-2. **Runtime Python legado depreciado (`src/anki_workflow_mcp/` / `src/anki_mcp/`):** o catálogo histórico permanece disponível para manifesto, staging e fluxos antigos, emitindo `DeprecationWarning` e aviso em stderr. Rust é a única autoridade de produção; a depreciação não significa paridade integral das 49 ferramentas nem autoriza sua remoção antes da verificação de migração e CI Linux/Windows.
+1. **Núcleo primário Rust:** o servidor MCP expõe 7 ferramentas MCP (`generation_contract_get`, `quality_prepare`, `quality_evaluate`, `review_batch_information`, `cards_compile_drafts`, `batch_patch_draft` e `export_reviewed_files`): seis operações puras em memória e `export_reviewed_files` para escrita local explícita. Além disso, disponibiliza subcomandos CLI nativos (`serve`, `sync-decks` e `sync-media`) e o binário auxiliar `export-schemas`. Rust é a única autoridade de domínio e segurança HTML5.
+2. **Runtime Python legado depreciado (`src/anki_mcp/`):** o catálogo histórico permanece disponível para manifesto, staging e fluxos antigos, emitindo `DeprecationWarning` e aviso em stderr. Rust é a única autoridade de produção; a depreciação não significa paridade integral das 49 ferramentas nem autoriza sua remoção antes da verificação de migração e CI Linux/Windows.
 
 ---
 
@@ -77,11 +77,6 @@ O binário Rust exige o subcomando `serve` para iniciar o transporte stdio. Conf
 Além de operar como servidor MCP stdio padrão, o executável nativo Rust disponibiliza subcomandos para operação e automação em linha de comando:
 
 - **`serve`**: Inicia o servidor MCP através do transporte padrão stdio (JSON-RPC 2.0). É o comando padrão utilizado pelos clientes MCP.
-- **`validate`**: Valida a estrutura e conformidade de arquivos de rascunho sem iniciar o loop MCP:
-  - `--qa-file <path>`: caminho do arquivo CSV ou rascunho QA a ser inspecionado.
-  - `--cloze-file <path>`: caminho do arquivo CSV ou rascunho Cloze a ser inspecionado.
-  - `--mode <quick|full>`: perfil de validação (`quick` para checagem rápida ou `full` para avaliação completa).
-  - `--format <human|json>`: formato da saída (`human` para leitura no terminal ou `json` estruturado para CI e scripts).
 - **`sync-decks`**: Sincroniza baralhos compilados diretamente contra uma coleção Anki local (`collection.anki2`).
 - **`sync-media`**: Sincroniza arquivos de mídia locais para o diretório de mídia do Anki (opera com dry-run por padrão).
 - **Comandos de inspeção e integridade**:
@@ -111,13 +106,13 @@ Para manter o núcleo Rust purista e livre de dependências Node na raiz do repo
 
 ---
 
-### 2. Runtime Python Legado em `src/anki_workflow_mcp/` (Depreciado)
+### 2. Runtime Python Legado em `src/anki_mcp/` (Depreciado)
 
-> **Status de Depreciação (`DeprecationWarning`):** O runtime Python legado localizado em `src/anki_workflow_mcp/` (empacotado como `src/anki_mcp/`) está formalmente depreciado. A execução do módulo emite aviso de depreciação (`DeprecationWarning`) em stderr. **O Rust é a única autoridade de produção.**
+> **Status de Depreciação (`DeprecationWarning`):** O runtime Python legado localizado em `src/anki_mcp/` está formalmente depreciado. A execução do módulo emite aviso de depreciação (`DeprecationWarning`) em stderr. **O Rust é a única autoridade de produção.**
 
 O runtime Python permanece disponível exclusivamente para compatibilidade histórica transitória em fluxos de trabalho legados que ainda dependem de persistência transacional em disco, manifesto (`manifesto_init`, `manifesto_commit`), staging em arquivo, catálogos e suítes diferenciais de paridade (`just parity`). A depreciação não significa paridade integral das 49 ferramentas nem autoriza sua remoção antes da verificação completa em CI Linux e Windows.
 
-Requer Python 3.12–3.14 (CI em Python 3.13) e [uv](https://docs.astral.sh/uv/):
+Requer Python `>=3.12,<3.15` (intervalo declarado em `pyproject.toml`; o CI não fixa a versão do interpretador) e [uv](https://docs.astral.sh/uv/):
 
 ```bash
 # Execução direta via módulo Python (sem ambiguidade com o binário Rust)
@@ -165,7 +160,7 @@ crates/
   anki-domain/          Tipos de domínio fundamentais, diagnósticos e recibo v1
   anki-parser/          Parsing de CSV (split_row) e contagem de cartões
   anki-validate/        Validações de regras, compilador de drafts e motor quality_v1
-src/anki_mcp/           Runtime Python legado depreciado (`src/anki_workflow_mcp/`; DeprecationWarning)
+src/anki_mcp/           Runtime Python legado depreciado (DeprecationWarning)
 contracts/
   v2/                   JSON Schemas canônicos (Draft 2020-12) e tipos TypeScript derivados (.d.ts)
   legacy/               Contratos JSON congelados da especificação MCP v1

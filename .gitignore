@@ -42,7 +42,14 @@ target/
 # Node / TypeScript / npm artifacts
 node_modules/
 npm-stage/
+npm-tarballs/
+*.tgz
 *.tsbuildinfo
+
+# Runtime export artifacts (export_reviewed_files / --out-dir / npm pack smoke)
+exports/
+.anki-workflow-export-state.json
+smoke-test/
 
 # Superpowers orchestration
 .superpowers/

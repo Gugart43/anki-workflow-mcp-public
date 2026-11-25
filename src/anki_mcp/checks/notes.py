@@ -13,8 +13,10 @@ from __future__ import annotations
 import re
 
 from anki_mcp.checks.information import (
+    BULLET_GLYPHS,
     is_exact_answer_restatement,
     is_exam_only_note,
+    parse_html_text,
     visible_char_count,
 )
 from anki_mcp.core import vocab
@@ -22,10 +24,29 @@ from anki_mcp.models import Diagnostic
 
 DEFAULT_MAX_LENGTH = 1200  # characters; configurable via deck config
 
-_METADATA_HEADERS = re.compile(
-    r"^\s*(ID\s*:|Âncora\s*:|Anchor\s*:|Cross-ref\s*:|Cross\s+ref\s*:|Relevância\s*:|Relevancia\s*:)",
-    re.IGNORECASE | re.MULTILINE,
+# Rótulo de metadado proibido, ancorado no começo de uma linha visível.
+#
+# `[*_]{0,2}` aceita o realce markdown que o autor digita (`**ID:**`, `__Âncora:__`) — sem
+# ele, um campo com `**ID:**` escapava da checagem (Onda 2, B26). Espelha
+# `notes::METADATA_HEADER_LABEL_RE` no Rust; o bullet inicial é removido antes por
+# `_strip_leading_marker`. Grupo 1 = rótulo, para a mensagem continuar a histórica.
+_METADATA_HEADER_LABEL = re.compile(
+    r"^[*_]{0,2}\s*(ID\s*:|Âncora\s*:|Anchor\s*:|Cross-ref\s*:|Cross\s+ref\s*:|Relevância\s*:|Relevancia\s*:)",
+    re.IGNORECASE,
 )
+
+# A união de glifos vive em `checks.information.BULLET_GLYPHS` (espelha
+# `anki_validate::text_norm::BULLET_GLYPHS`, Onda 2/B24) — não repetir aqui.
+
+
+def _strip_leading_marker(line: str) -> str:
+    """Remove um bullet inicial e o espaço seguinte (espelha `text_norm::strip_leading_marker`)."""
+    stripped = line.lstrip()
+    if stripped and stripped[0] in BULLET_GLYPHS:
+        return stripped[1:].lstrip()
+    return line
+
+
 # Style: list items should use "• <b>Tópico:</b>"
 _STYLE_ITEM_RE = re.compile(r"[•\-\*]\s+(?!<b>)", re.MULTILINE)
 
@@ -43,16 +64,23 @@ def check_notes(
     # Notes are optional post-answer study context, not a recall obligation.
     # Length is advisory only; atomicity limits apply to the stem and answer.
     # ── NOTE.METADATA ─────────────────────────────────────────────────────────
-    for m in _METADATA_HEADERS.finditer(notes):
-        diags.append(
-            Diagnostic.from_code(
-                "NOTE.METADATA",
-                f"Forbidden metadata header found: '{m.group(0).strip()}'",
-                row=row,
-                field=field,
-                suggestion="Remove metadata — Notes field is for pedagogical explanations only",
+    #
+    # Varre o texto visível linha a linha (mesmo `parse_html_text` do Rust) para poder
+    # remover o bullet inicial antes do rótulo (Onda 2, B26): `• ID:` e `**ID:**` são o
+    # mesmo metadado que `ID:`.
+    block_text, _, _ = parse_html_text(notes)
+    for line in block_text.splitlines():
+        m = _METADATA_HEADER_LABEL.match(_strip_leading_marker(line))
+        if m:
+            diags.append(
+                Diagnostic.from_code(
+                    "NOTE.METADATA",
+                    f"Forbidden metadata header found: '{m.group(1).strip()}'",
+                    row=row,
+                    field=field,
+                    suggestion="Remove metadata — Notes field is for pedagogical explanations only",
+                )
             )
-        )
 
     # ── NOTE.DUP_ANSWER_WARN ─────────────────────────────────────────────────
     if answer and notes and is_exact_answer_restatement(notes, answer):
@@ -101,7 +129,7 @@ def check_notes(
         diags.append(
             Diagnostic.from_code(
                 "NOTE.STYLE_WARN",
-                "List items found without <b>…</b> wrapper — preferred: '• <b>Tópico:</b> …'",
+                "Legacy list formatting found — preferred: '• <b>Tópico:</b> …'",
                 row=row,
                 field=field,
             )

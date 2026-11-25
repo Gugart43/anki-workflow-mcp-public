@@ -21,8 +21,8 @@ Rust é a autoridade de parsing, compilação e `quality_v1`. A fronteira MCP ex
     - **Validação de veredito:** Exige compulsoriamente a declaração `verdict == "PASS"`; avaliações com `FAIL` ou `INCOMPLETE` são terminantemente rejeitadas.
     - **Integridade via `receipt_hash`:** Valida o hash canônico dos CSVs (`sha256(b"qa\0" + qa_csv + b"\0cloze\0" + cloze_csv)`) contra o payload fornecido, impedindo escrita caso o conteúdo tenha sido alterado pós-auditoria.
     - **Escrita atômica e rollback:** Prepara a gravação em diretório temporário de staging no mesmo sistema de arquivos e promove os arquivos atomicamente; falhas de I/O acionam rollback completo sem corromper o lote.
-    - **Manifesto transacional:** Registra o manifesto `.anki_export_manifest.json` com histórico de exportação, batch ID, hashes dos CSVs e metadados no diretório de destino.
-    - O servidor revalida estrutura CSV e HTML antes da escrita. Não importa no Anki nem autentica o revisor. `sync-media` e `sync-decks` são utilitários da CLI nativa Rust. O runtime Python legado em `src/anki_workflow_mcp/` é deprecated, sem interoperabilidade de recibos entre diferentes protocolos.
+    - **Ledger transacional:** Registra o ledger `.anki-workflow-export-state.json` (com `.anki_workflow_export.lock` para o lock cruzado de processos) com histórico de exportação, batch ID, hashes dos CSVs e metadados no diretório de destino.
+    - O servidor revalida estrutura CSV e HTML antes da escrita. Não importa no Anki nem autentica o revisor. `sync-media` e `sync-decks` são utilitários da CLI nativa Rust. O runtime Python legado em `src/anki_mcp/` é deprecated, sem interoperabilidade de recibos entre diferentes protocolos.
 
 ## Critérios editoriais de aceitação
 

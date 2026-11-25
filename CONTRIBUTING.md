@@ -16,7 +16,19 @@ Agradecemos o interesse em contribuir com o `anki-workflow-mcp`. Para manter a i
 
 ## Setup local
 
-Pré-requisitos: [Rust](https://rustup.rs/) (lido automaticamente de `rust-toolchain.toml`, canal `1.99.1`; MSRV real mínimo 1.89 por `uuid 1.29.2`, `rmcp 3.10.0` e let-chains), [uv](https://docs.astral.sh/uv/) e [just](https://github.com/casey/just).
+Pré-requisitos com as versões efetivamente usadas pelo CI (`.github/workflows/ci.yml`):
+
+| Ferramenta | Versão | Fonte da verdade |
+| --- | --- | --- |
+| Rust (toolchain) | `1.99.1` + componentes `rustfmt` e `clippy` | `rust-toolchain.toml`; o CI lê o `channel` do próprio arquivo antes de instalar |
+| MSRV declarada | `1.89` (mínimo real, não o toolchain de desenvolvimento) | `[workspace.package] rust-version` em `Cargo.toml` |
+| Python | `>=3.12,<3.15` | `requires-python` em `pyproject.toml` |
+| uv | última release (instalada por `astral-sh/setup-uv`); `uv.lock` validado por `uv lock --check` e `--locked` | `.github/workflows/ci.yml` |
+| Node.js | `24` | `.nvmrc` e `node-version: "24"` no CI |
+| pnpm | `10.26.0` | `pnpm/action-setup` no CI |
+| just | opcional (apenas atalhos locais) | `justfile` |
+
+O `.npmrc` na raiz define `engine-strict=true`: instalações npm falham quando `engines.node` do pacote não é satisfeito (use Node 24, conforme `.nvmrc`).
 
 ```bash
 just setup
@@ -42,7 +54,7 @@ Receitas individuais disponíveis no `justfile`:
 
 ## Diretrizes de Qualidade e Contratos
 
-- **Fronteira Verídica de Capacidades:** O servidor Rust stdio expõe exatamente **6 ferramentas puramente em memória** (`cards_compile_drafts`, `review_batch_information`, `quality_prepare`, `quality_evaluate`, `batch_patch_draft` e `generation_contract_get`), introduzindo capacidades exclusivas de compilação e avaliação em memória. O servidor Python disponibiliza seu catálogo de 49 ferramentas e retém com exclusividade as operações com estado em disco (manifesto, staging, ledger de IDs, sincronização de mídia e exportação final). As ferramentas Rust não são um subconjunto do catálogo Python. Não afirme paridade total para funcionalidades com estado não migradas.
+- **Fronteira Verídica de Capacidades:** O servidor Rust stdio expõe exatamente **7 ferramentas** (`cards_compile_drafts`, `review_batch_information`, `quality_prepare`, `quality_evaluate`, `batch_patch_draft`, `generation_contract_get` e `export_reviewed_files`): seis operações puramente em memória mais `export_reviewed_files` para persistência local explícita, introduzindo capacidades exclusivas de compilação e avaliação em memória. O servidor Python disponibiliza seu catálogo de 49 ferramentas e retém com exclusividade as demais operações com estado em disco (manifesto, staging, ledger de IDs e sincronização de mídia). As ferramentas Rust não são um subconjunto do catálogo Python. Não afirme paridade total para funcionalidades com estado não migradas.
 - **Preservação de Compatibilidade:** O cálculo canônico de recibo `compute_receipt_v1`, os delimitadores de linha (`split_row`), os campos AnkiMBR e as convenções de CSV devem manter paridade absoluta bit a bit com os fixtures golden. Mudanças de contrato exigem revisão explícita.
 - **Limites Epistemológicos:** O gate `quality_v1` valida consistência de fontes, cobertura de obrigações e estrutura em memória. Em todas as avaliações, `export_authorized` e `clinical_correctness_certified` permanecem estritamente `false`. Não afirme validação médica, semântica ou eficácia pedagógica a partir de métricas automatizadas.
 - **Atomicidade e HTML:** O comprimento das notas adicionais isoladamente não deve ser classificado como falha crítica de atomicidade quando a cobrança for unívoca. Preserve tabelas e figuras nas notas (`tabelas_notas`, `figuras_notas`) com HTML seguro (`<figure>`, `<figcaption>`).

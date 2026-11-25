@@ -68,10 +68,30 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Rust toolchain channel (rust-toolchain.toml)
+        id: rust_toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/.*channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -n1)" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
           components: rustfmt, clippy
+
+      - name: Verify Rust toolchain matches rust-toolchain.toml
+        shell: bash
+        run: |
+          rustc --version --verbose
+          cargo --version
+          EXPECTED="${{ steps.rust_toolchain.outputs.channel }}"
+          case "$(rustc --version)" in
+            "rustc $EXPECTED "*|"rustc $EXPECTED"*) ;;
+            *)
+              echo "::error::rustc does not match rust-toolchain.toml channel '$EXPECTED': $(rustc --version)"
+              exit 1
+              ;;
+          esac
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7
@@ -124,20 +144,23 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
       - name: Install dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --locked
 
       - name: Lint (ruff)
-        run: uv run --frozen ruff check src tests scripts
+        run: uv run --locked ruff check src tests scripts
 
       - name: Typecheck (mypy)
-        run: uv run --frozen mypy src
+        run: uv run --locked mypy src
 
       - name: Unit & integration tests (non-differential)
-        run: uv run --frozen pytest --ignore=tests/differential
+        run: uv run --locked pytest --ignore=tests/differential
 
       - name: Theme regression checks (AnkiMBR CSS v2 bridge)
-        run: uv run --frozen python tests/theme_regression_checks.py
+        run: uv run --locked python tests/theme_regression_checks.py
 
   parity:
     name: Parity (ubuntu-latest)
@@ -164,12 +187,12 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --extra dev --frozen
+        run: uv sync --extra dev --locked
 
       - name: Differential parity tests
         env:
           ANKI_RUST_BIN: ${{ github.workspace }}/target/debug/anki-workflow-mcp
-        run: uv run --frozen pytest tests/differential/
+        run: uv run --locked pytest tests/differential/
 
   mcp-contract-ts:
     name: MCP Contract TS (${{ matrix.os }})
@@ -245,8 +268,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Rust toolchain channel (rust-toolchain.toml)
+        id: rust_toolchain
+        shell: bash
+        run: echo "channel=$(sed -n 's/.*channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -n1)" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: ${{ steps.rust_toolchain.outputs.channel }}
+
+      - name: Print rustc version
+        shell: bash
+        run: rustc --version --verbose
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3 # v2.7.7

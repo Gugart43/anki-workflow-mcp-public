@@ -1,5 +1,7 @@
 use anki_domain::{Severity, compute_receipt_v1};
-use anki_validate::quality::{QualityObligation, evaluate_quality, prepare_quality};
+use anki_validate::quality::{
+    QualityMode, QualityObligation, QualityReport, evaluate_quality, prepare_quality,
+};
 
 use super::common::{approve_qa_review, has_quality_diag, make_qa_csv, sample_valid_qa_input};
 
@@ -190,4 +192,186 @@ fn revise_verdict_and_false_dimension_fail() {
         "QUALITY.REVIEW_DIMENSION_FAILED",
         Severity::Critical
     ));
+}
+
+/// Conjunto ordenado e deduplicado de `(code, severity)` do relatório: é o que
+/// deve permanecer idêntico sob permutação da lista de reviews.
+fn diag_code_set(report: &QualityReport) -> Vec<String> {
+    let mut set: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|d| format!("{}:{:?}", d.code.as_str(), d.severity))
+        .collect();
+    set.sort();
+    set.dedup();
+    set
+}
+
+fn has_code(report: &QualityReport, code: &str) -> bool {
+    report.diagnostics.iter().any(|d| d.code == code)
+}
+
+#[test]
+fn receipt_hash_is_the_domain_receipt_accepted_by_export() {
+    let input = sample_valid_qa_input();
+    let rep = prepare_quality(&input);
+    let expected = compute_receipt_v1(&input.qa_csv, &input.cloze_csv).into_inner();
+
+    assert_eq!(rep.receipt_hash, expected);
+    assert_eq!(rep.receipt_hash, rep.content_hash);
+    assert!(rep.receipt_hash.starts_with("sha256:"));
+}
+
+#[test]
+fn quick_evaluate_fails_closed_instead_of_passing_without_reviews() {
+    let mut input = sample_valid_qa_input();
+    input.mode = QualityMode::Quick;
+
+    // quick + prepare: comportamento inalterado (structural/HTML only, sem o novo código).
+    let prep = prepare_quality(&input);
+    assert_eq!(prep.mode, "prepare");
+    assert_eq!(prep.verdict, "PASS", "diagnostics: {:?}", prep.diagnostics);
+    assert_eq!(prep.reviewed_count, 0);
+    assert!(!has_code(&prep, "QUALITY.QUICK_SKIPS_REVIEWS"));
+
+    // quick + evaluate: não valida reviews -> Critical explícito e FAIL (antes: PASS
+    // com reviewed_count = 0, um passe livre silencioso sobre lote não revisado).
+    input.reviews = vec![approve_qa_review(&prep.snapshot_hash, 2)];
+    let eval_quick = evaluate_quality(&input);
+    assert_eq!(eval_quick.mode, "evaluate");
+    assert_eq!(eval_quick.verdict, "FAIL");
+    assert_eq!(eval_quick.reviewed_count, 0);
+    assert!(has_quality_diag(
+        &eval_quick,
+        "QUALITY.QUICK_SKIPS_REVIEWS",
+        Severity::Critical
+    ));
+
+    // strict + evaluate: inalterado (PASS com a review aprovada).
+    input.mode = QualityMode::Strict;
+    let eval_strict = evaluate_quality(&input);
+    assert_eq!(
+        eval_strict.verdict, "PASS",
+        "diagnostics: {:?}",
+        eval_strict.diagnostics
+    );
+    assert_eq!(eval_strict.reviewed_count, 1);
+    assert!(!has_code(&eval_strict, "QUALITY.QUICK_SKIPS_REVIEWS"));
+}
+
+#[test]
+fn reviewed_count_and_code_set_are_invariant_to_review_order() {
+    // Medido antes: [approve, revise] => reviewed_count = 1; [revise, approve] => 0.
+    let mut input = sample_valid_qa_input();
+    let prep = prepare_quality(&input);
+
+    let approve = approve_qa_review(&prep.snapshot_hash, 2);
+    let mut revise = approve_qa_review(&prep.snapshot_hash, 2);
+    revise.verdict = "revise".to_owned();
+
+    input.reviews = vec![approve.clone(), revise.clone()];
+    let first = evaluate_quality(&input);
+    input.reviews = vec![revise, approve];
+    let second = evaluate_quality(&input);
+
+    assert_eq!(
+        first.reviewed_count, 1,
+        "diagnostics: {:?}",
+        first.diagnostics
+    );
+    assert_eq!(second.reviewed_count, first.reviewed_count);
+    assert_eq!(diag_code_set(&second), diag_code_set(&first));
+    assert_eq!(first.verdict, second.verdict);
+    // Um único DUPLICATE_REVIEW por chave repetida, apesar das duas reviews.
+    assert_eq!(
+        first
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == "QUALITY.DUPLICATE_REVIEW")
+            .count(),
+        1,
+        "diagnostics: {:?}",
+        first.diagnostics
+    );
+    assert!(has_quality_diag(
+        &first,
+        "QUALITY.REVIEW_REVISE",
+        Severity::Critical
+    ));
+}
+
+#[test]
+fn one_valid_review_fulfills_the_key_regardless_of_sibling_quality() {
+    // Duas reviews para a MESMA linha: uma válida e uma com snapshot defasado.
+    // A chave é cumprida porque ALGUMA review dela é válida, em qualquer ordem.
+    let mut input = sample_valid_qa_input();
+    input.qa_csv = make_qa_csv(&[
+        (
+            "Em paciente adulto com síndrome X sintética, qual é o marcador de primeira linha?",
+            "Marcador Alfa",
+            "Explicação clínica sintética sobre o marcador.",
+        ),
+        (
+            "Em paciente adulto com síndrome X sintética, qual é o marcador de segunda linha?",
+            "Marcador Beta",
+            "Explicação clínica sintética sobre o segundo marcador.",
+        ),
+    ]);
+    let prep = prepare_quality(&input);
+
+    let current = approve_qa_review(&prep.snapshot_hash, 2);
+    let stale_other_row = approve_qa_review("sha256:stale", 3);
+
+    input.reviews = vec![current.clone(), stale_other_row.clone()];
+    let first = evaluate_quality(&input);
+    input.reviews = vec![stale_other_row, current];
+    let second = evaluate_quality(&input);
+
+    assert_eq!(
+        first.reviewed_count, 1,
+        "diagnostics: {:?}",
+        first.diagnostics
+    );
+    assert_eq!(second.reviewed_count, 1);
+    assert_eq!(diag_code_set(&second), diag_code_set(&first));
+    assert!(has_quality_diag(
+        &first,
+        "QUALITY.STALE_REVIEW_SNAPSHOT",
+        Severity::Critical
+    ));
+}
+
+#[test]
+fn snapshot_hash_ignores_csv_formatting_noise_but_tracks_content() {
+    let base = sample_valid_qa_input();
+    let base_hash = prepare_quality(&base).snapshot_hash;
+
+    let qa_variants = [
+        ("newline final", format!("{}\n", base.qa_csv)),
+        ("linha em branco extra", format!("{}\n\n", base.qa_csv)),
+        (
+            "espaços à direita",
+            format!("{}   ", base.qa_csv.replace('\n', "  \n")),
+        ),
+    ];
+    for (label, qa_csv) in qa_variants {
+        let mut variant = base.clone();
+        variant.qa_csv = qa_csv;
+        // Ruído equivalente no CSV de cloze também não pode contar.
+        variant.cloze_csv = format!("{}\n", base.cloze_csv);
+        assert_eq!(
+            prepare_quality(&variant).snapshot_hash,
+            base_hash,
+            "formatação '{label}' não deveria mudar o snapshot_hash"
+        );
+    }
+
+    // Controle: conteúdo realmente diferente muda o hash.
+    let mut changed = base.clone();
+    changed.qa_csv = make_qa_csv(&[(
+        "Em paciente adulto com síndrome X sintética, qual é o marcador de última linha?",
+        "Marcador Gama",
+        "Explicação clínica sintética sobre o marcador.",
+    )]);
+    assert_ne!(prepare_quality(&changed).snapshot_hash, base_hash);
 }

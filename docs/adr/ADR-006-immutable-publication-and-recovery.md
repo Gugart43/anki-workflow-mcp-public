@@ -1,8 +1,9 @@
 # ADR-006: Publicação Imutável de Artefatos, Projeções de Sistema de Arquivos, Retenção e Recuperação
 
-- **Status:** Proposed / Target Architecture (Not Implemented)
-- **Status de Implementação:** Publicação imutável em 2 estágios e GC em 2 fases não implementados; exportação atual via `export_final` no Python.
+- **Status:** Superseded by ADR-007
+- **Status de Implementação:** Superado no essencial. O protocolo de publicação em duas etapas e a retenção com GC **não** foram implementados: não há `artifact_versions`, `batches.active_artifact_version`, *tombstone*/*purge* nem a ferramenta `batch_rollback`. O que existe é publicação transacional por lote em `apps/anki-workflow-mcp/src/export.rs` — staging no mesmo filesystem, `sync_all`, `fs::rename`, rollback reverso RAII e ledger `.anki-workflow-export-state.json` com replay idempotente e adoção pós-crash (`recovered_from_disk`). O ponteiro de versão ativa e seu trigger não existem; o código `STATE.*` de ponteiro inválido nunca foi registrado no catálogo (o equivalente mais próximo é `EXPORT.STATE_INVALID`). Ver ADR-007.
 - **Data:** 2026-11-14
+- **Substituída em:** 2026-11-15 por ADR-007
 - **Relacionado:** ADR-001, ADR-003, ADR-004, ADR-005, Seções 3.2, 4.3 e 5.1 do `PLANO_MESTRE_ANKI_WORKFLOW_MCP_RUST_V2.md`
 - **Ressalvas do Parecer Técnico Incorporadas:** P-04, P-15, P-16
 
@@ -89,7 +90,7 @@ ON artifact_versions(deck_id, batch_id, publication_state);
   FOR EACH ROW
   WHEN NEW.active_artifact_version IS NOT NULL
   BEGIN
-      SELECT RAISE(ABORT, 'STATE.INVALID_POINTER: active_artifact_version must point to a COMMITTED artifact_version')
+      SELECT RAISE(ABORT, 'EXPORT.STATE_INVALID: active_artifact_version must point to a COMMITTED artifact_version')
       WHERE NOT EXISTS (
           SELECT 1 FROM artifact_versions
           WHERE deck_id = NEW.deck_id

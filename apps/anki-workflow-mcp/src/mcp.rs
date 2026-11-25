@@ -8,7 +8,7 @@ use anki_validate::quality::{
     QualityObligation, QualityPrepareInput, QualityReview, QualitySource, evaluate_quality,
     prepare_quality_input,
 };
-use anki_validate::{compile_drafts_strict, patch_draft, review_batch_information};
+use anki_validate::{CompileMode, compile_drafts_with_mode, patch_draft, review_batch_information};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ErrorCode, Implementation, JsonObject,
     ListToolsResult, PaginatedRequestParams, ServerCapabilities, ServerConfig, Tool,
@@ -80,10 +80,18 @@ pub struct InputViolation {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct ToolErrorPayload {
+    /// Single-line, sanitized human-readable error message.
     pub error: String,
+    /// Stable machine-readable error code: `INVALID_ARGUMENTS` (argument parse/decode),
+    /// `COMPILE.INVALID_DRAFT` (draft decode/normalize/compile), `INVALID_INPUT_RANGES`
+    /// (structured range violations), `INTERNAL.SERIALIZE` (result serialization),
+    /// `EXPORT.*` (export domain errors).
     pub code: &'static str,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Structured field-level violations, always present (empty when there are none).
     pub violations: Vec<InputViolation>,
+    /// JSON path of the offending argument element, omitted when not applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, JsonSchema)]
@@ -100,12 +108,20 @@ pub struct CompileDraftsArgs {
     /// List of card draft objects (QA or Cloze) to normalize and compile.
     #[schemars(with = "Vec<StrictRawCardDraft>")]
     pub drafts: Vec<Value>,
+    /// Rewrite Cloze deletions into sequential `c1..cN` order before compiling (default `true`).
+    /// Set to `false` only when the draft already carries the final indices.
     #[serde(default = "default_true")]
     pub auto_renumber_cloze: bool,
+    /// Strip leaked internal identifiers (deck/note/board ids) from rendered text (default `true`).
+    /// Set to `false` only when the identifiers are intentional content.
     #[serde(default = "default_true")]
     pub auto_purge_id_leaks: bool,
+    /// Fallback value for the `Campo de Estudo` column, applied to drafts that omit
+    /// `campo_estudo` / `study_field` (default empty string).
     #[serde(default)]
     pub default_campo_estudo: String,
+    #[serde(default)]
+    pub compile_mode: CompileMode,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -182,6 +198,8 @@ impl From<QualityObligationArg> for QualityObligation {
 #[serde(deny_unknown_fields)]
 pub struct QualityEvidenceArg {
     pub source_id: String,
+    /// Excerpt copied verbatim from the referenced `sources[].text`; it must be an exact
+    /// substring of that source text (no paraphrasing, normalization, or ellipsis).
     pub quote: String,
     pub locator: String,
     pub scope: EvidenceScope,
@@ -202,8 +220,12 @@ impl From<QualityEvidenceArg> for QualityEvidence {
 #[serde(deny_unknown_fields)]
 pub struct QualityBindingArg {
     pub note_type: StrictNoteTypeArg,
+    /// 1-based CSV data row of the retrieval, counting the header row; use `>= 2`
+    /// (row 1 is the header). Rows beyond the compiled batch cannot bind any card.
     #[schemars(range(min = 2))]
     pub source_row: i64,
+    /// 1-based Cloze deletion index (`cN`) inside the sentence; required with
+    /// `>= 1` for `note_type: CL` and must be absent/null for `note_type: QA`.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub cloze_index: Option<i64>,
@@ -253,11 +275,17 @@ impl From<ReviewDimensionsArg> for QualityDimensions {
 #[serde(deny_unknown_fields)]
 pub struct QualityReviewArg {
     pub note_type: StrictNoteTypeArg,
+    /// 1-based CSV data row of the reviewed retrieval, counting the header row; use `>= 2`
+    /// (row 1 is the header).
     #[schemars(range(min = 2))]
     pub source_row: i64,
+    /// 1-based Cloze deletion index (`cN`) inside the sentence; required with
+    /// `>= 1` for `note_type: CL` and must be absent/null for `note_type: QA`.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub cloze_index: Option<i64>,
+    /// `snapshot_hash` returned by `quality_prepare` for the exact batch being reviewed;
+    /// a stale or foreign hash is reported as `INCOMPLETE` and never authorizes export.
     pub snapshot_hash: String,
     pub reviewer: String,
     pub verdict: ReviewVerdict,
@@ -447,33 +475,92 @@ fn tool_error_payload(payload: ToolErrorPayload) -> CallToolResponse {
     match serde_json::to_value(payload) {
         Ok(val) => CallToolResult::structured_error(val).into(),
         Err(err) => CallToolResult::structured_error(json!({
-            "error": err.to_string(),
-            "code": "SERIALIZE_ERROR"
+            "error": sanitize_error_text(&format!("Failed to serialize tool error payload: {err}")),
+            "code": "INTERNAL.SERIALIZE",
+            "violations": []
         }))
         .into(),
     }
 }
 
-fn tool_error(message: impl AsRef<str>) -> CallToolResponse {
+fn tool_error_with(
+    code: &'static str,
+    message: impl AsRef<str>,
+    path: Option<String>,
+    violations: Vec<InputViolation>,
+) -> CallToolResponse {
     tool_error_payload(ToolErrorPayload {
         error: sanitize_error_text(message.as_ref()),
-        code: "INVALID_ARGUMENTS",
-        violations: Vec::new(),
+        code,
+        violations,
+        path,
     })
+}
+
+/// Argument parse/decode failure, carrying the JSON path of the offending element.
+struct ArgsError {
+    message: String,
+    path: Option<String>,
+}
+
+/// `INVALID_ARGUMENTS`: the request arguments could not be parsed/decoded.
+fn tool_invalid_arguments(err: &ArgsError) -> CallToolResponse {
+    tool_error_with(
+        "INVALID_ARGUMENTS",
+        &err.message,
+        err.path.clone(),
+        Vec::new(),
+    )
+}
+
+/// `COMPILE.INVALID_DRAFT`: a draft could not be decoded, normalized, or compiled.
+/// The domain message already carries the `drafts[i]:` prefix.
+fn tool_invalid_draft(message: impl AsRef<str>) -> CallToolResponse {
+    tool_error_with("COMPILE.INVALID_DRAFT", message, None, Vec::new())
+}
+
+/// `INTERNAL.SERIALIZE`: the tool result could not be serialized.
+fn tool_serialize_failure(context: &str, err: &serde_json::Error) -> CallToolResponse {
+    tool_error_with(
+        "INTERNAL.SERIALIZE",
+        format!("Failed to serialize {context}: {err}"),
+        None,
+        Vec::new(),
+    )
 }
 
 fn tool_ok(value: Value) -> CallToolResponse {
     CallToolResult::structured(value).into()
 }
 
-fn parse_args<T: for<'de> Deserialize<'de>>(arguments: Option<JsonObject>) -> Result<T, String> {
+fn parse_args<T: for<'de> Deserialize<'de>>(arguments: Option<JsonObject>) -> Result<T, ArgsError> {
     let map = arguments.unwrap_or_default();
-    serde_json::from_value(Value::Object(map)).map_err(|err| {
-        format!(
-            "Invalid tool arguments: {}",
-            sanitize_error_text(&err.to_string())
-        )
-    })
+    let value = Value::Object(map);
+    match serde_path_to_error::deserialize::<_, T>(&value) {
+        Ok(parsed) => Ok(parsed),
+        Err(err) => {
+            let path = normalize_arg_path(&err.path().to_string());
+            let detail = sanitize_error_text(&err.into_inner().to_string());
+            let message = match path.as_deref() {
+                Some(path) => format!("Invalid tool arguments at `{path}`: {detail}"),
+                None => format!("Invalid tool arguments: {detail}"),
+            };
+            Err(ArgsError { message, path })
+        }
+    }
+}
+
+/// Normaliza o `serde_path_to_error` path para o payload de erro.
+///
+/// `serde_path_to_error` devolve `"."` quando o erro é na raiz do objeto (e `""` quando não há
+/// caminho). Ambos são ruído: o esquema do `ToolErrorPayload` só admite `path` ausente ou um
+/// caminho não vazio, então raiz vira `None` em vez de `"path": "."`.
+fn normalize_arg_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return None;
+    }
+    Some(trimmed.to_owned())
 }
 
 fn readonly_annotations() -> ToolAnnotations {
@@ -510,7 +597,7 @@ fn init_tools() -> Vec<Tool> {
 
     let cards_compile_drafts = Tool::new(
         "cards_compile_drafts",
-        "Normalize and compile structured QA/Cloze draft objects in memory into canonical pipe-delimited `qa_csv` and `cloze_csv` with structural diagnostics and statistics.",
+        "Normalize and compile structured QA/Cloze draft objects in memory into canonical pipe-delimited `qa_csv` and `cloze_csv` with structural diagnostics and statistics. Arguments: `drafts` (required, one object per card) plus the optional knobs `auto_renumber_cloze` (default `true`, rewrites Cloze deletions into sequential `c1..cN`), `auto_purge_id_leaks` (default `true`, strips leaked internal identifiers from rendered text), `default_campo_estudo` (fallback `Campo de Estudo` for drafts without one, default `\"\"`) and `compile_mode`, which selects the `notas_adicionais` compiler: `legacy_compat` (default) accepts the legacy fields; `strict_v2` accepts only the canonical `NoteDocument` (`blocos`/`fontes`) and rejects populated legacy fields and fails with code `COMPILE.INVALID_DRAFT`.",
         schema_for_args::<CompileDraftsArgs>(),
     )
     .with_annotations(ann.clone());
@@ -524,14 +611,14 @@ fn init_tools() -> Vec<Tool> {
 
     let quality_prepare = Tool::new(
         "quality_prepare",
-        "Prepare a deterministic quality snapshot (`snapshot_hash`) and per-retrieval inventory from compiled CSVs and optional quality bindings/sources/obligations.",
+        "Prepare a deterministic quality snapshot (`snapshot_hash`) and per-retrieval inventory from compiled CSVs and optional quality bindings/sources/obligations. `mode` (default `strict`): `quick` runs lightweight structural/HTML checks only, `strict` enforces full source grounding, obligation coverage, and independent editorial review. Each `bindings[i]` needs `source_row` (1-based data row, counting the header, so `>= 2`), `cloze_index` (`>= 1`, required for `note_type: CL`, absent for `QA`), `obligation_ids` and `evidence[]`, where `evidence[i].quote` must be a verbatim substring of the referenced `sources[i].text`.",
         schema_for_args::<QualityPrepareArgs>(),
     )
     .with_annotations(ann.clone());
 
     let quality_evaluate = Tool::new(
         "quality_evaluate",
-        "Evaluate source fidelity, obligation coverage, evidence bindings, and independent editorial reviews per QA row and Cloze index against the batch snapshot.",
+        "Evaluate source fidelity, obligation coverage, evidence bindings, and independent editorial reviews per QA row and Cloze index against the batch snapshot. `mode` (default `strict`): `quick` runs lightweight structural/HTML checks only, `strict` enforces full source grounding, obligation coverage, and independent editorial review. Each `bindings[i]` uses `source_row` (1-based data row counting the header, so `>= 2`) plus `cloze_index` (`>= 1`, required for `note_type: CL`, absent for `QA`); each `reviews[i]` must echo the exact `snapshot_hash` from `quality_prepare` for the same batch, otherwise the result is `INCOMPLETE`.",
         schema_for_args::<QualityEvaluateArgs>(),
     )
     .with_annotations(ann.clone());
@@ -552,7 +639,7 @@ fn init_tools() -> Vec<Tool> {
 
     let export_reviewed_files = Tool::new(
         "export_reviewed_files",
-        "Atomically export reviewed QA/Cloze CSV files to deck export directory after validating receipt hash, verdict PASS, CSV format, and HTML safety. Idempotent on identical payload; records exported state.",
+        "Atomically export reviewed QA/Cloze CSV files to deck export directory after validating receipt hash, verdict PASS, CSV format, and HTML safety. Idempotent on identical payload; records exported state. Arguments: `deck_dir` (destination deck directory; files land in its `exports/` subdirectory, and `..`/symlinks/empty paths are rejected), `batch_id` (stable id used for the idempotency ledger; no path separators or reserved names), `qa_csv` and `cloze_csv` (exact compiled content to persist), `receipt_hash` (SHA-256 of that exact CSV pair), `evaluation_verdict` (must be exactly `PASS`; `INCOMPLETE`/`REVISE`/`FAIL` are rejected), `topic_slug` (optional filename stem, defaults to the sanitized `batch_id`) and `write_to_deck_root` (default `true`, also mirrors the written files into the deck root).",
         schema_for_args::<ExportReviewedFilesArgs>(),
     )
     .with_annotations(
@@ -737,12 +824,13 @@ fn map_export_result(result: Result<ExportReviewedFilesResult, ExportError>) -> 
     match result {
         Ok(res) => match serde_json::to_value(&res) {
             Ok(val) => tool_ok(val),
-            Err(err) => tool_error(format!("Failed to serialize export result: {err}")),
+            Err(err) => tool_serialize_failure("export_reviewed_files result", &err),
         },
         Err(err) => tool_error_payload(ToolErrorPayload {
             error: sanitize_error_text(&err.message),
             code: err.code,
             violations: Vec::new(),
+            path: None,
         }),
     }
 }
@@ -753,7 +841,7 @@ async fn dispatch_tool_call_async(
     if request.name.as_ref() == "export_reviewed_files" {
         let args: ExportReviewedFilesArgs = match parse_args(request.arguments) {
             Ok(parsed) => parsed,
-            Err(msg) => return Ok(tool_error(msg)),
+            Err(err) => return Ok(tool_invalid_arguments(&err)),
         };
         let export_result =
             tokio::task::spawn_blocking(move || execute_export_reviewed_files(&args)).await;
@@ -763,6 +851,7 @@ async fn dispatch_tool_call_async(
                 error: sanitize_error_text(&format!("Export blocking task failed: {join_err}")),
                 code: "EXPORT.TASK_JOIN_ERROR",
                 violations: Vec::new(),
+                path: None,
             }),
         });
     }
@@ -776,103 +865,101 @@ fn dispatch_tool_call(request: CallToolRequestParams) -> Result<CallToolResponse
         "cards_compile_drafts" => {
             let args: CompileDraftsArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
-            match compile_drafts_strict(
+            match compile_drafts_with_mode(
                 &args.drafts,
                 args.auto_renumber_cloze,
                 args.auto_purge_id_leaks,
                 &args.default_campo_estudo,
+                true,
+                args.compile_mode,
             ) {
                 Ok(val) => Ok(tool_ok(val)),
-                Err(msg) => Ok(tool_error(msg)),
+                Err(msg) => Ok(tool_invalid_draft(msg)),
             }
         }
         "review_batch_information" => {
             let args: ReviewBatchInformationArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
             let review = review_batch_information(&args.qa_csv, &args.cloze_csv);
             match serde_json::to_value(&review) {
                 Ok(val) => Ok(tool_ok(val)),
-                Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize batch information review: {err}"
-                ))),
+                Err(err) => Ok(tool_serialize_failure("batch information review", &err)),
             }
         }
         "quality_prepare" => {
             let args: QualityPrepareArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
             let mut violations = Vec::new();
             args.collect_range_violations(&mut violations);
             if !violations.is_empty() {
-                return Ok(tool_error_payload(ToolErrorPayload {
-                    error: format!(
+                return Ok(tool_error_with(
+                    "INVALID_INPUT_RANGES",
+                    format!(
                         "Invalid tool arguments: {} range violation(s) encountered",
                         violations.len()
                     ),
-                    code: "INVALID_INPUT_RANGES",
+                    None,
                     violations,
-                }));
+                ));
             }
             let input = args.into_prepare_input();
             let report = prepare_quality_input(&input);
             match serde_json::to_value(&report) {
                 Ok(val) => Ok(tool_ok(val)),
-                Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize quality_prepare result: {err}"
-                ))),
+                Err(err) => Ok(tool_serialize_failure("quality_prepare result", &err)),
             }
         }
         "quality_evaluate" => {
             let args: QualityEvaluateArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
             let mut violations = Vec::new();
             args.collect_range_violations(&mut violations);
             if !violations.is_empty() {
-                return Ok(tool_error_payload(ToolErrorPayload {
-                    error: format!(
+                return Ok(tool_error_with(
+                    "INVALID_INPUT_RANGES",
+                    format!(
                         "Invalid tool arguments: {} range violation(s) encountered",
                         violations.len()
                     ),
-                    code: "INVALID_INPUT_RANGES",
+                    None,
                     violations,
-                }));
+                ));
             }
             let input = args.into_evaluate_input();
             let report = evaluate_quality(&input);
             match serde_json::to_value(&report) {
                 Ok(val) => Ok(tool_ok(val)),
-                Err(err) => Ok(tool_error(format!(
-                    "Failed to serialize quality_evaluate result: {err}"
-                ))),
+                Err(err) => Ok(tool_serialize_failure("quality_evaluate result", &err)),
             }
         }
         "batch_patch_draft" => {
             let args: BatchPatchDraftArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
             match patch_draft(&Value::Object(args.draft), &args.updates) {
                 Ok(card) => Ok(tool_ok(json!({ "card": card }))),
-                Err(msg) => Ok(tool_error(msg)),
+                Err(msg) => Ok(tool_invalid_draft(msg)),
             }
         }
         "generation_contract_get" => {
-            if let Err(msg) = parse_args::<EmptyArgs>(request.arguments) {
-                return Ok(tool_error(msg));
+            if let Err(err) = parse_args::<EmptyArgs>(request.arguments) {
+                return Ok(tool_invalid_arguments(&err));
             }
             Ok(tool_ok(generation_contract_payload()))
         }
         "export_reviewed_files" => {
             let args: ExportReviewedFilesArgs = match parse_args(request.arguments) {
                 Ok(parsed) => parsed,
-                Err(msg) => return Ok(tool_error(msg)),
+                Err(err) => return Ok(tool_invalid_arguments(&err)),
             };
             Ok(map_export_result(execute_export_reviewed_files(&args)))
         }
@@ -1018,13 +1105,20 @@ mod tests {
         .expect("should return tool response");
         assert!(is_error_response(&resp));
         let payload = extract_error_payload(&resp);
-        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert_eq!(payload["code"], json!("COMPILE.INVALID_DRAFT"));
         assert!(
             payload["error"]
                 .as_str()
                 .unwrap_or_default()
                 .contains("CLOZ"),
             "error should mention unsupported tipo CLOZ"
+        );
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("drafts[0]:"),
+            "compile errors must preserve the drafts[i]: prefix"
         );
     }
 
@@ -1158,6 +1252,11 @@ mod tests {
         .expect("should return tool response");
         assert!(is_error_response(&bad));
         let payload = extract_error_payload(&bad);
+        assert_eq!(
+            payload["code"],
+            json!("COMPILE.INVALID_DRAFT"),
+            "draft decode/normalize errors must not be reported as INVALID_ARGUMENTS"
+        );
         assert!(
             payload["error"]
                 .as_str()
@@ -1252,6 +1351,333 @@ mod tests {
                 .unwrap_or_default()
                 .contains("fail-closed CSV/HTML revalidation")
         }));
+    }
+
+    #[test]
+    fn nested_enum_and_type_errors_expose_the_failing_json_path() {
+        let dimensions = json!({
+            "source_fidelity": true,
+            "atomic_retrieval": true,
+            "context_sufficient": true,
+            "no_answer_leak": true,
+            "clinically_relevant": true,
+            "notes_appropriate": true,
+            "media_appropriate": true
+        });
+
+        // (a) enum inválido em `reviews[0].verdict`
+        let bad_verdict = dispatch_tool_call(make_call(
+            "quality_evaluate",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "reviews": [{
+                    "note_type": "QA",
+                    "source_row": 2,
+                    "snapshot_hash": "h",
+                    "reviewer": "r",
+                    "verdict": "maybe",
+                    "rationale": "ok",
+                    "dimensions": dimensions.clone()
+                }]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&bad_verdict));
+        let payload = extract_error_payload(&bad_verdict);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert_eq!(
+            payload["path"],
+            json!("reviews[0].verdict"),
+            "path must identify the offending element: {payload}"
+        );
+        let err = payload["error"].as_str().unwrap_or_default();
+        assert!(
+            err.contains("at `reviews[0].verdict`"),
+            "error must name the offending path: {err}"
+        );
+        assert!(
+            err.contains("maybe"),
+            "error must quote the bad value: {err}"
+        );
+
+        // (b) enum inválido no segundo elemento de `bindings`
+        let bad_note_type = dispatch_tool_call(make_call(
+            "quality_prepare",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "bindings": [
+                    {
+                        "note_type": "QA",
+                        "source_row": 2,
+                        "obligation_ids": [],
+                        "evidence": []
+                    },
+                    {
+                        "note_type": "QS",
+                        "source_row": 2,
+                        "obligation_ids": [],
+                        "evidence": []
+                    }
+                ]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&bad_note_type));
+        let payload = extract_error_payload(&bad_note_type);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert_eq!(payload["path"], json!("bindings[1].note_type"));
+
+        // (c) tipo errado em campo aninhado de `sources`
+        let bad_source_text = dispatch_tool_call(make_call(
+            "quality_prepare",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "sources": [{
+                    "id": "s1",
+                    "title": "T",
+                    "version": "v1",
+                    "locator": "p1",
+                    "text": 123
+                }]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&bad_source_text));
+        let payload = extract_error_payload(&bad_source_text);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert_eq!(payload["path"], json!("sources[0].text"));
+
+        // (d) campo desconhecido no próprio elemento aninhado
+        let unknown_nested_field = dispatch_tool_call(make_call(
+            "quality_prepare",
+            json!({
+                "qa_csv": "",
+                "cloze_csv": "",
+                "sources": [{
+                    "id": "s1",
+                    "title": "T",
+                    "version": "v1",
+                    "locator": "p1",
+                    "text": "excerpt",
+                    "extra_nested": 123
+                }]
+            }),
+        ))
+        .expect("should return tool response");
+        assert!(is_error_response(&unknown_nested_field));
+        let payload = extract_error_payload(&unknown_nested_field);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert_eq!(payload["path"], json!("sources[0].extra_nested"));
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("extra_nested")
+        );
+    }
+
+    #[test]
+    fn tool_error_payload_always_emits_violations_and_omits_absent_path() {
+        let plain = serde_json::to_value(ToolErrorPayload {
+            error: "boom".to_owned(),
+            code: "INVALID_ARGUMENTS",
+            violations: Vec::new(),
+            path: None,
+        })
+        .expect("serialize error payload");
+        assert_eq!(
+            plain["violations"],
+            json!([]),
+            "violations must always be emitted (schema requires it): {plain}"
+        );
+        assert_eq!(plain.as_object().map(serde_json::Map::len), Some(3));
+        assert!(plain.get("path").is_none(), "absent path must be omitted");
+
+        let located = serde_json::to_value(ToolErrorPayload {
+            error: "boom".to_owned(),
+            code: "INVALID_ARGUMENTS",
+            violations: Vec::new(),
+            path: Some("drafts[0].tipo".to_owned()),
+        })
+        .expect("serialize error payload");
+        assert_eq!(located["violations"], json!([]));
+        assert_eq!(located["path"], json!("drafts[0].tipo"));
+    }
+
+    #[test]
+    fn normalize_arg_path_drops_the_root_markers() {
+        // `serde_path_to_error` devolve "." para erros na raiz do objeto e "" quando não há
+        // caminho; ambos são ruído no payload.
+        assert_eq!(normalize_arg_path(""), None);
+        assert_eq!(normalize_arg_path("."), None);
+        assert_eq!(normalize_arg_path("  "), None);
+        assert_eq!(
+            normalize_arg_path("drafts[0].tipo"),
+            Some("drafts[0].tipo".to_owned())
+        );
+        assert_eq!(normalize_arg_path("sources"), Some("sources".to_owned()));
+    }
+
+    #[test]
+    fn root_level_argument_error_omits_the_dotted_path() {
+        // `qa_csv`/`cloze_csv` são obrigatórios: faltando, o erro é na RAIZ do objeto e antes
+        // saía como `"path": "."`.
+        let resp = dispatch_tool_call(make_call("quality_prepare", json!({})))
+            .expect("should return tool response");
+        assert!(is_error_response(&resp));
+        let payload = extract_error_payload(&resp);
+        assert_eq!(payload["code"], json!("INVALID_ARGUMENTS"));
+        assert!(
+            payload.get("path").is_none(),
+            "root-level argument errors must omit path: {payload}"
+        );
+        let err = payload["error"].as_str().unwrap_or_default();
+        assert!(
+            !err.contains("at `.`"),
+            "root-level argument errors must not name `.` as a path: {err}"
+        );
+        assert!(
+            err.contains("Invalid tool arguments:"),
+            "message must stay the path-less form: {err}"
+        );
+    }
+
+    #[test]
+    fn tool_error_payload_schema_requires_violations_and_keeps_path_optional() {
+        let schema = Value::Object((*schema_for_args::<ToolErrorPayload>()).clone());
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            required.contains(&"violations"),
+            "violations must stay required in the contract: {schema}"
+        );
+        assert!(
+            !required.contains(&"path"),
+            "path must stay optional in the contract: {schema}"
+        );
+        assert!(
+            schema["properties"]["path"].is_object(),
+            "path must be declared: {schema}"
+        );
+    }
+
+    #[test]
+    fn serialize_failures_use_internal_serialize_code() {
+        let err = serde_json::from_str::<Value>("{").expect_err("invalid JSON fixture");
+        let resp = tool_serialize_failure("quality_prepare result", &err);
+        assert!(is_error_response(&resp));
+        let payload = extract_error_payload(&resp);
+        assert_eq!(payload["code"], json!("INTERNAL.SERIALIZE"));
+        assert_eq!(payload["violations"], json!([]));
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Failed to serialize quality_prepare result")
+        );
+    }
+
+    /// A `description` sibling next to `$ref` makes the TS codegen emit a duplicated
+    /// type (`CompileMode1`/`QualityMode1`), so documented `$ref` properties are
+    /// intentionally documented in the tool description instead. `$defs` subtrees are
+    /// skipped: there the description belongs to the definition itself.
+    fn assert_no_description_beside_ref(schema: &Value, path: &str) {
+        match schema {
+            Value::Object(obj) => {
+                if obj.contains_key("$ref") {
+                    assert!(
+                        obj.get("description").is_none(),
+                        "description beside $ref at {path} would duplicate the TS type"
+                    );
+                    return;
+                }
+                for (key, value) in obj {
+                    if key == "$defs" || key == "definitions" {
+                        continue;
+                    }
+                    assert_no_description_beside_ref(value, &format!("{path}.{key}"));
+                }
+            }
+            Value::Array(items) => {
+                for (idx, item) in items.iter().enumerate() {
+                    assert_no_description_beside_ref(item, &format!("{path}[{idx}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn tool_argument_schemas_never_attach_description_to_a_ref() {
+        for tool in build_tools() {
+            let schema_val = tool.schema_as_json_value();
+            assert_no_description_beside_ref(&schema_val, tool.name.as_ref());
+        }
+    }
+
+    /// Builds the schema exactly like `export-schemas` does (draft 2020-12, defs kept as
+    /// `$ref`, no inlining), so the assertion covers what lands in `contracts/v2`.
+    fn exported_schema<T: JsonSchema>() -> Value {
+        SchemaSettings::draft2020_12()
+            .into_generator()
+            .into_root_schema_for::<T>()
+            .to_value()
+    }
+
+    #[test]
+    fn exported_contract_schemas_never_attach_description_to_a_ref() {
+        assert_no_description_beside_ref(
+            &exported_schema::<CompileDraftsArgs>(),
+            "CompileDraftsArgs",
+        );
+        assert_no_description_beside_ref(
+            &exported_schema::<QualityPrepareArgs>(),
+            "QualityPrepareArgs",
+        );
+        assert_no_description_beside_ref(
+            &exported_schema::<QualityEvaluateArgs>(),
+            "QualityEvaluateArgs",
+        );
+        assert_no_description_beside_ref(
+            &exported_schema::<ToolErrorPayload>(),
+            "ToolErrorPayload",
+        );
+
+        // `compile_mode`/`mode` are `$ref` properties: they must stay undocumented there,
+        // otherwise the TS codegen emits `CompileMode1`/`QualityMode1`.
+        for (label, schema, prop) in [
+            (
+                "CompileDraftsArgs",
+                exported_schema::<CompileDraftsArgs>(),
+                "compile_mode",
+            ),
+            (
+                "QualityPrepareArgs",
+                exported_schema::<QualityPrepareArgs>(),
+                "mode",
+            ),
+            (
+                "QualityEvaluateArgs",
+                exported_schema::<QualityEvaluateArgs>(),
+                "mode",
+            ),
+        ] {
+            assert!(
+                schema["properties"][prop].get("description").is_none(),
+                "{label}.{prop} must not carry a description next to its $ref"
+            );
+            assert!(
+                schema["properties"][prop].get("$ref").is_some(),
+                "{label}.{prop} is expected to stay a $ref in the exported contract"
+            );
+        }
     }
 
     #[tokio::test]

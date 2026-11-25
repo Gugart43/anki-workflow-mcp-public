@@ -16,6 +16,14 @@
       ],
       "type": "string"
     },
+    "CompileMode": {
+      "description": "Modo de compilação do documento de notas adicionais.",
+      "enum": [
+        "legacy_compat",
+        "strict_v2"
+      ],
+      "type": "string"
+    },
     "FlowEdge": {
       "additionalProperties": false,
       "properties": {
@@ -923,14 +931,21 @@
   "properties": {
     "auto_purge_id_leaks": {
       "default": true,
+      "description": "Strip leaked internal identifiers (deck/note/board ids) from rendered text (default `true`).\nSet to `false` only when the identifiers are intentional content.",
       "type": "boolean"
     },
     "auto_renumber_cloze": {
       "default": true,
+      "description": "Rewrite Cloze deletions into sequential `c1..cN` order before compiling (default `true`).\nSet to `false` only when the draft already carries the final indices.",
       "type": "boolean"
+    },
+    "compile_mode": {
+      "$ref": "#/$defs/CompileMode",
+      "default": "legacy_compat"
     },
     "default_campo_estudo": {
       "default": "",
+      "description": "Fallback value for the `Campo de Estudo` column, applied to drafts that omit\n`campo_estudo` / `study_field` (default empty string).",
       "type": "string"
     },
     "drafts": {

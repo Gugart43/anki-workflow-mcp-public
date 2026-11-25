@@ -52,6 +52,16 @@ BASE_LIMITATIONS: tuple[str, ...] = (
 )
 _BASE_LIMITATIONS = BASE_LIMITATIONS
 
+# Glifos de bullet — espelha `anki_validate::text_norm::BULLET_GLYPHS` (Onda 2, B24).
+# União única do projeto: os glifos tipográficos separam itens inline (`_BULLET_INLINE_RE`)
+# e, junto de `-`/`*`/`–`/`—`, formam o prefixo de item removido nas comparações.
+BULLET_GLYPHS = "•‣◦·▪▫▸►●○-*–—"
+# Glifos tipográficos (não-ASCII): só eles separam itens no meio da linha, como no Rust.
+GLYPH_BULLETS = "".join(c for c in BULLET_GLYPHS if not c.isascii())
+# Corrida de bullets + espaço que abre um texto/segmento.
+_LEADING_BULLETS_RE = re.compile(rf"^[{re.escape(BULLET_GLYPHS)}\s]+")
+
+
 _BLOCK_BREAK_TAGS = frozenset(
     {
         "br",
@@ -157,7 +167,7 @@ def visible_char_count(raw: str) -> int:
 def normalize_for_exact_match(raw: str) -> str:
     """Normalize text for exact repetition checks (HTML, entities, case, trailing punctuation)."""
     vis = html_to_visible_text(raw).casefold()
-    vis = re.sub(r"^[•\-–—*\s]+", "", vis)
+    vis = _LEADING_BULLETS_RE.sub("", vis)
     vis = re.sub(r"[.!?…:;\s]+$", "", vis)
     return vis.strip()
 
@@ -219,7 +229,7 @@ def is_exam_only_note(notes: str) -> bool:
     if not raw_segments:
         return False
     for seg in raw_segments:
-        cleaned = re.sub(r"^[•\-–—*\s]+", "", seg).strip()
+        cleaned = _LEADING_BULLETS_RE.sub("", seg).strip()
         cleaned = re.sub(r"[,:;()\s]+$", "", cleaned).strip()
         if not cleaned:
             continue
@@ -263,7 +273,7 @@ _COMPARISON_RE = re.compile(r"\b(?:vs\.?|versus)\b", re.IGNORECASE)
 _NUMBERED_INLINE_RE = re.compile(
     r"(?:^|\s)(?:\(\d{1,2}\)|(?<!\d)\d{1,2}\)|\d{1,2}\.(?=\s+[A-Za-zÀ-ÖØ-öø-ÿ]))\s+"
 )
-_BULLET_INLINE_RE = re.compile(r"(?:^|\s)[•]\s+")
+_BULLET_INLINE_RE = re.compile(rf"(?:^|\s)[{re.escape(GLYPH_BULLETS)}]\s+")
 
 
 def _split_top_level(text: str, sep_char: str) -> list[str]:
@@ -390,7 +400,10 @@ def extract_candidate_items(raw_html: str) -> tuple[list[str], list[str]]:
                 evidence.append("conjunction_e")
             stage2 = comma_parts
 
-    cleaned = [re.sub(r"^(?:[•\-–—*]|\(\d+\)|\d+\))\s*", "", item).strip() for item in stage2]
+    cleaned = [
+        re.sub(rf"^(?:[{re.escape(BULLET_GLYPHS)}]|\(\d+\)|\d+\))\s*", "", item).strip()
+        for item in stage2
+    ]
     cleaned = [c for c in cleaned if c]
     if not cleaned:
         cleaned = [html_to_visible_text(raw_html)]

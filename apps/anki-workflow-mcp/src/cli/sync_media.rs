@@ -55,6 +55,10 @@ pub struct SyncMediaArgs {
     pub apply: bool,
     pub copy_noise: bool,
     pub only: Vec<String>,
+    /// Accept a catalog that yields zero entries instead of failing with `MEDIA.CATALOG_SHAPE`.
+    pub allow_empty: bool,
+    /// Fail (exit 1) when the catalog references sources that do not exist.
+    pub fail_on_missing: bool,
 }
 
 /// Catalog entry loaded from JSON or CSV.
@@ -85,7 +89,7 @@ pub fn parse_args(args: &[String]) -> Result<SyncMediaArgs, (u8, String)> {
         if arg == "-h" || arg == "--help" {
             return Err((
                 0,
-                "Usage: anki-workflow-mcp sync-media --catalog <PATH> [--collection-media-dir <DIR>] [--apply | --dry-run] [--copy-noise] [--only <NAMES>]"
+                "Usage: anki-workflow-mcp sync-media --catalog <PATH> [--collection-media-dir <DIR>] [--apply | --dry-run] [--copy-noise] [--only <NAMES>] [--allow-empty] [--fail-on-missing]"
                     .to_string(),
             ));
         } else if arg == "--apply" {
@@ -98,6 +102,12 @@ pub fn parse_args(args: &[String]) -> Result<SyncMediaArgs, (u8, String)> {
             i += 1;
         } else if arg == "--copy-noise" {
             parsed.copy_noise = true;
+            i += 1;
+        } else if arg == "--allow-empty" {
+            parsed.allow_empty = true;
+            i += 1;
+        } else if arg == "--fail-on-missing" {
+            parsed.fail_on_missing = true;
             i += 1;
         } else if arg == "--catalog" {
             if i + 1 >= args.len() {
@@ -525,22 +535,25 @@ pub fn parse_json_catalog(
                 }
             };
 
-            entries.push(CatalogEntry {
-                filename: fn_str.to_string(),
-                namespaced,
-                caption: clean_cap,
-                noise: is_noise,
-                noise_reason: n_reason.to_string(),
-                slug,
-                page: item.get("page").and_then(|v| v.as_u64()).map(|v| v as u32),
-                width_px: w_px,
-                height_px: h_px,
-                item_type: item
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("figure")
-                    .to_string(),
-            });
+            push_validated_entry(
+                &mut entries,
+                CatalogEntry {
+                    filename: fn_str.to_string(),
+                    namespaced,
+                    caption: clean_cap,
+                    noise: is_noise,
+                    noise_reason: n_reason.to_string(),
+                    slug,
+                    page: item.get("page").and_then(|v| v.as_u64()).map(|v| v as u32),
+                    width_px: w_px,
+                    height_px: h_px,
+                    item_type: item
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("figure")
+                        .to_string(),
+                },
+            )?;
         }
         return Ok(entries);
     }
@@ -613,22 +626,25 @@ pub fn parse_json_catalog(
             }
         };
 
-        entries.push(CatalogEntry {
-            filename: fn_str.to_string(),
-            namespaced,
-            caption: clean_cap,
-            noise: is_noise,
-            noise_reason: n_reason.to_string(),
-            slug: doc_slug.clone(),
-            page: item.get("page").and_then(|v| v.as_u64()).map(|v| v as u32),
-            width_px: w_px,
-            height_px: h_px,
-            item_type: item
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("figure")
-                .to_string(),
-        });
+        push_validated_entry(
+            &mut entries,
+            CatalogEntry {
+                filename: fn_str.to_string(),
+                namespaced,
+                caption: clean_cap,
+                noise: is_noise,
+                noise_reason: n_reason.to_string(),
+                slug: doc_slug.clone(),
+                page: item.get("page").and_then(|v| v.as_u64()).map(|v| v as u32),
+                width_px: w_px,
+                height_px: h_px,
+                item_type: item
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("figure")
+                    .to_string(),
+            },
+        )?;
     }
 
     Ok(entries)
@@ -730,18 +746,21 @@ pub fn parse_csv_catalog(raw: &str, default_slug: &str) -> Result<Vec<CatalogEnt
                 .unwrap_or("figure")
                 .to_string();
 
-            entries.push(CatalogEntry {
-                filename: fn_str.to_string(),
-                namespaced,
-                caption: clean_cap,
-                noise: is_noise,
-                noise_reason: n_reason.to_string(),
-                slug,
-                page,
-                width_px: None,
-                height_px: None,
-                item_type,
-            });
+            push_validated_entry(
+                &mut entries,
+                CatalogEntry {
+                    filename: fn_str.to_string(),
+                    namespaced,
+                    caption: clean_cap,
+                    noise: is_noise,
+                    noise_reason: n_reason.to_string(),
+                    slug,
+                    page,
+                    width_px: None,
+                    height_px: None,
+                    item_type,
+                },
+            )?;
         }
         return Ok(entries);
     }
@@ -766,22 +785,25 @@ pub fn parse_csv_catalog(raw: &str, default_slug: &str) -> Result<Vec<CatalogEnt
             let fn_str = parts[0];
             let ns_str = parts[1];
             let n_bool = matches!(parts[2].to_lowercase().as_str(), "true" | "1" | "yes");
-            entries.push(CatalogEntry {
-                filename: fn_str.to_string(),
-                namespaced: ns_str.to_lowercase(),
-                caption: String::new(),
-                noise: n_bool,
-                noise_reason: if n_bool {
-                    "explicit_noise".to_string()
-                } else {
-                    String::new()
+            push_validated_entry(
+                &mut entries,
+                CatalogEntry {
+                    filename: fn_str.to_string(),
+                    namespaced: ns_str.to_lowercase(),
+                    caption: String::new(),
+                    noise: n_bool,
+                    noise_reason: if n_bool {
+                        "explicit_noise".to_string()
+                    } else {
+                        String::new()
+                    },
+                    slug: default_slug.to_string(),
+                    page: None,
+                    width_px: None,
+                    height_px: None,
+                    item_type: "figure".to_string(),
                 },
-                slug: default_slug.to_string(),
-                page: None,
-                width_px: None,
-                height_px: None,
-                item_type: "figure".to_string(),
-            });
+            )?;
             continue;
         }
 
@@ -798,18 +820,21 @@ pub fn parse_csv_catalog(raw: &str, default_slug: &str) -> Result<Vec<CatalogEnt
             let clean_cap = clean_extractor_caption(cap_str);
             let (is_noise, n_reason) = is_noise_caption(&clean_cap);
             let namespaced = build_namespaced(&slug, fn_str);
-            entries.push(CatalogEntry {
-                filename: fn_str.to_string(),
-                namespaced,
-                caption: clean_cap,
-                noise: is_noise,
-                noise_reason: n_reason.to_string(),
-                slug,
-                page: None,
-                width_px: None,
-                height_px: None,
-                item_type: "figure".to_string(),
-            });
+            push_validated_entry(
+                &mut entries,
+                CatalogEntry {
+                    filename: fn_str.to_string(),
+                    namespaced,
+                    caption: clean_cap,
+                    noise: is_noise,
+                    noise_reason: n_reason.to_string(),
+                    slug,
+                    page: None,
+                    width_px: None,
+                    height_px: None,
+                    item_type: "figure".to_string(),
+                },
+            )?;
             continue;
         }
 
@@ -833,18 +858,21 @@ pub fn parse_csv_catalog(raw: &str, default_slug: &str) -> Result<Vec<CatalogEnt
             let clean_cap = clean_extractor_caption(parts[1]);
             let (is_noise, n_reason) = is_noise_caption(&clean_cap);
             let namespaced = build_namespaced(default_slug, fn_str);
-            entries.push(CatalogEntry {
-                filename: fn_str.to_string(),
-                namespaced,
-                caption: clean_cap,
-                noise: is_noise,
-                noise_reason: n_reason.to_string(),
-                slug: default_slug.to_string(),
-                page: None,
-                width_px: None,
-                height_px: None,
-                item_type: "figure".to_string(),
-            });
+            push_validated_entry(
+                &mut entries,
+                CatalogEntry {
+                    filename: fn_str.to_string(),
+                    namespaced,
+                    caption: clean_cap,
+                    noise: is_noise,
+                    noise_reason: n_reason.to_string(),
+                    slug: default_slug.to_string(),
+                    page: None,
+                    width_px: None,
+                    height_px: None,
+                    item_type: "figure".to_string(),
+                },
+            )?;
         }
     }
 
@@ -1046,34 +1074,76 @@ pub fn parse_markdown_catalog(
             .and_then(|idx| cells.get(idx))
             .and_then(|s| s.parse::<u32>().ok());
 
-        entries.push(CatalogEntry {
-            filename,
-            namespaced,
-            caption: clean_cap,
-            noise: is_noise,
-            noise_reason: n_reason.to_string(),
-            slug,
-            page,
-            width_px: None,
-            height_px: None,
-            item_type: "figure".to_string(),
-        });
+        push_validated_entry(
+            &mut entries,
+            CatalogEntry {
+                filename,
+                namespaced,
+                caption: clean_cap,
+                noise: is_noise,
+                noise_reason: n_reason.to_string(),
+                slug,
+                page,
+                width_px: None,
+                height_px: None,
+                item_type: "figure".to_string(),
+            },
+        )?;
     }
 
     Ok(entries)
 }
 
+/// Catalog file names probed when `--catalog` points to a directory.
+pub const CATALOG_FILE_CANDIDATES: [&str; 5] = [
+    "catalog.json",
+    "anki_catalog.csv",
+    "anki_deck.csv",
+    "catalog.md",
+    "central_images.json",
+];
+
+/// Error raised when a non-empty catalog parses into zero entries because its shape is unknown.
+fn catalog_shape_error(message: String) -> (u8, String) {
+    let err = json!({
+        "status": "ERROR",
+        "code": "MEDIA.CATALOG_SHAPE",
+        "message": message,
+        "accepted_shapes": [
+            "catalog.json | central_images.json: {\"images\": [...]}, {\"items\": [...]} or a top-level array (each item needs \"filename\")",
+            "anki_catalog.csv | anki_deck.csv: pipe-delimited rows, with or without a header row",
+            "catalog.md: markdown table whose rows contain ![alt](file.ext)"
+        ],
+        "suggestion": "Use one of the accepted shapes, or pass --allow-empty when an empty catalog is intentional."
+    });
+    (1, err.to_string())
+}
+
+/// Validates the raw and namespaced filenames before an entry becomes usable, so a security
+/// violation is never demoted to `skipped_noise` by the noise filter.
+fn push_validated_entry(
+    entries: &mut Vec<CatalogEntry>,
+    entry: CatalogEntry,
+) -> Result<(), (u8, String)> {
+    validate_filename_security(&entry.filename)?;
+    if !entry.namespaced.is_empty() {
+        validate_filename_security(&entry.namespaced)?;
+    }
+    entries.push(entry);
+    Ok(())
+}
+
 /// Loads catalog entries from a file or directory.
-pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, String)> {
+///
+/// A non-empty catalog that parses into zero entries is a shape error (`MEDIA.CATALOG_SHAPE`)
+/// unless `allow_empty` is set: silently syncing nothing while reporting success hides broken
+/// catalogs.
+pub fn load_catalog(
+    catalog_path: &Path,
+    allow_empty: bool,
+) -> Result<Vec<CatalogEntry>, (u8, String)> {
     let target_file = if catalog_path.is_dir() {
-        let candidates = [
-            "catalog.json",
-            "anki_catalog.csv",
-            "anki_deck.csv",
-            "catalog.md",
-            "central_images.json",
-        ];
-        candidates
+        CATALOG_FILE_CANDIDATES
             .iter()
             .map(|c| catalog_path.join(c))
             .find(|p| p.is_file())
@@ -1099,7 +1169,14 @@ pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, Strin
     };
 
     if target_file.is_dir() || !target_file.exists() {
-        return Ok(Vec::new());
+        if allow_empty {
+            return Ok(Vec::new());
+        }
+        return Err(catalog_shape_error(format!(
+            "Nenhum arquivo de catálogo reconhecido em '{}' (procurados: {})",
+            catalog_path.display(),
+            CATALOG_FILE_CANDIDATES.join(", ")
+        )));
     }
 
     check_not_symlink(&target_file)?;
@@ -1127,13 +1204,22 @@ pub fn load_catalog(catalog_path: &Path) -> Result<Vec<CatalogEntry>, (u8, Strin
         .unwrap_or("");
     let default_slug = normalize_slug(parent_name.trim_start_matches("images_"));
 
-    if ext == "json" {
+    let entries = if ext == "json" {
         parse_json_catalog(&raw, &default_slug)
     } else if ext == "md" {
         parse_markdown_catalog(&raw, &default_slug)
     } else {
         parse_csv_catalog(&raw, &default_slug)
+    }?;
+
+    if entries.is_empty() && !raw.trim().is_empty() && !allow_empty {
+        return Err(catalog_shape_error(format!(
+            "O catálogo '{}' não está vazio mas gerou 0 entradas: formato/topo desconhecido",
+            target_file.display()
+        )));
     }
+
+    Ok(entries)
 }
 
 /// Helper to acquire an exclusive lock with a timeout.
@@ -1349,7 +1435,7 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
         parsed_args.catalog.clone()
     };
 
-    let entries = load_catalog(&parsed_args.catalog)?;
+    let entries = load_catalog(&parsed_args.catalog, parsed_args.allow_empty)?;
     let filter_set: HashSet<String> = parsed_args
         .only
         .iter()
@@ -1457,19 +1543,27 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
     }
 
     if !parsed_args.apply || !collisions.is_empty() {
-        for (_, _, ns) in &to_copy {
-            let cap = entries
-                .iter()
-                .find(|e| &e.namespaced == ns)
-                .map(|e| e.caption.clone())
-                .unwrap_or_default();
-            missing.push(json!({
-                "namespaced": ns,
-                "caption": cap,
-            }));
-        }
+        // Pending copies are reported as what they are: `would_copy`, never as `missing`.
+        let would_copy: Vec<Value> = to_copy
+            .iter()
+            .map(|(_, _, ns)| {
+                let cap = entries
+                    .iter()
+                    .find(|e| &e.namespaced == ns)
+                    .map(|e| e.caption.clone())
+                    .unwrap_or_default();
+                json!({
+                    "namespaced": ns,
+                    "caption": cap,
+                })
+            })
+            .collect();
+        // `missing` now holds only entries whose source file genuinely does not exist.
+        let missing_sources = missing.clone();
 
-        let active_total = synced.len() + missing.len() + collisions.len();
+        // Sync ratio is computed over the applied set (already synced vs. genuinely missing or
+        // colliding); pending copies are not counted as failures.
+        let active_total = synced.len() + missing_sources.len() + collisions.len();
         let ratio = if active_total > 0 {
             ((synced.len() as f64 / active_total as f64) * 10000.0).round() / 10000.0
         } else {
@@ -1489,10 +1583,38 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
                 "skipped_noise": skipped_noise,
                 "synced": synced.len(),
                 "copied": 0,
-                "missing": missing.len(),
+                "would_copy": would_copy.iter().take(50).cloned().collect::<Vec<_>>(),
+                "would_copy_count": would_copy.len(),
+                "missing": missing_sources.len(),
+                "missing_sources": missing_sources.iter().take(50).cloned().collect::<Vec<_>>(),
                 "collisions": collisions,
                 "sync_ratio": ratio,
-                "missing_list": missing.iter().take(50).cloned().collect::<Vec<_>>(),
+                "missing_list": missing_sources.iter().take(50).cloned().collect::<Vec<_>>(),
+            });
+            return Err((1, err.to_string()));
+        }
+
+        if parsed_args.fail_on_missing && !missing_sources.is_empty() {
+            let err = json!({
+                "status": "ERROR",
+                "code": "MEDIA.SOURCE_MISSING",
+                "message": format!(
+                    "{} source file(s) referenced by the catalog are missing (--fail-on-missing)",
+                    missing_sources.len()
+                ),
+                "suggestion": "Restore the missing sources or drop them from the catalog.",
+                "catalog": parsed_args.catalog.display().to_string(),
+                "collection": collection_media_dir.display().to_string(),
+                "total_catalog": entries.len(),
+                "active_evaluated": active_total,
+                "skipped_noise": skipped_noise,
+                "synced": synced.len(),
+                "copied": 0,
+                "would_copy": would_copy.iter().take(50).cloned().collect::<Vec<_>>(),
+                "would_copy_count": would_copy.len(),
+                "missing": missing_sources.len(),
+                "missing_sources": missing_sources,
+                "sync_ratio": ratio,
             });
             return Err((1, err.to_string()));
         }
@@ -1506,10 +1628,13 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
             "skipped_noise": skipped_noise,
             "synced": synced.len(),
             "copied": 0,
-            "missing": missing.len(),
+            "would_copy": would_copy.iter().take(50).cloned().collect::<Vec<_>>(),
+            "would_copy_count": would_copy.len(),
+            "missing": missing_sources.len(),
+            "missing_sources": missing_sources.iter().take(50).cloned().collect::<Vec<_>>(),
             "collisions": collisions,
             "sync_ratio": ratio,
-            "missing_list": missing.iter().take(50).cloned().collect::<Vec<_>>(),
+            "missing_list": missing_sources.iter().take(50).cloned().collect::<Vec<_>>(),
         }));
     }
 
@@ -1622,7 +1747,10 @@ pub fn run(args: &[String]) -> Result<Value, (u8, String)> {
         "skipped_noise": skipped_noise,
         "synced": synced.len(),
         "copied": copied_names.len(),
+        "would_copy": [],
+        "would_copy_count": 0,
         "missing": missing.len(),
+        "missing_sources": missing.iter().take(50).cloned().collect::<Vec<_>>(),
         "collisions": collisions,
         "sync_ratio": ratio,
         "missing_list": missing.iter().take(50).cloned().collect::<Vec<_>>(),
@@ -1778,8 +1906,14 @@ mod tests {
 
         assert_eq!(res["status"], "OK");
         assert_eq!(res["copied"], 0);
-        assert_eq!(res["missing"], 1);
+        // A pending copy is reported as `would_copy`, never as `missing`.
+        assert_eq!(res["missing"], 0);
+        assert_eq!(res["would_copy_count"], 1);
+        assert_eq!(res["would_copy"][0]["namespaced"], "neuro_brain.png");
+        assert_eq!(res["would_copy"][0]["caption"], "Ressonância");
+        assert_eq!(res["missing_sources"].as_array().map(Vec::len), Some(0));
         assert_eq!(res["synced"], 0);
+        assert_eq!(res["sync_ratio"], 1.0);
 
         // Lock files are NOT created in dry-run
         assert!(!dst.join(PRIMARY_LOCK_FILE).exists());
@@ -2137,15 +2271,178 @@ mod tests {
         )
         .unwrap();
 
-        let loaded_promoted = load_catalog(&md_path).unwrap();
+        let loaded_promoted = load_catalog(&md_path, false).unwrap();
         assert_eq!(loaded_promoted.len(), 1);
         assert_eq!(loaded_promoted[0].filename, "json_img.png");
 
         // When sibling json does not exist, md is parsed
         fs::remove_file(&json_path).unwrap();
-        let loaded_md = load_catalog(&md_path).unwrap();
+        let loaded_md = load_catalog(&md_path, false).unwrap();
         assert_eq!(loaded_md.len(), 1);
         assert_eq!(loaded_md[0].filename, "md_img.png");
+    }
+
+    #[test]
+    fn test_unknown_catalog_shape_fails_instead_of_silently_syncing_nothing() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dst).unwrap();
+
+        // Top level unknown: previously yielded `total_catalog: 0`, status OK and exit 0.
+        let cat_path = src.join("catalog.json");
+        fs::write(
+            &cat_path,
+            r#"{"figures":[{"filename":"x.png","caption":"Legenda válida"}]}"#,
+        )
+        .unwrap();
+
+        let err = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(err.0, 1, "catalog shape error must exit 1");
+        let err_val: Value = serde_json::from_str(&err.1).unwrap();
+        assert_eq!(err_val["code"], "MEDIA.CATALOG_SHAPE");
+        let shapes = err_val["accepted_shapes"].as_array().unwrap();
+        assert!(!shapes.is_empty(), "must list the accepted catalog shapes");
+        assert!(
+            shapes
+                .iter()
+                .any(|s| s.as_str().unwrap_or_default().contains("\"images\"")),
+            "accepted shapes must name the JSON top-level keys: {err_val}"
+        );
+
+        // `--allow-empty` is the explicit opt-out for a legitimately empty catalog.
+        let res = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+            "--allow-empty".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(res["status"], "OK");
+        assert_eq!(res["total_catalog"], 0);
+    }
+
+    #[test]
+    fn test_dry_run_separates_would_copy_from_missing_sources() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dst).unwrap();
+
+        fs::write(src.join("present.png"), b"present_data").unwrap();
+        // absent.png is referenced but does not exist on disk.
+        // already.png is already in collection.media with identical bytes.
+        fs::write(dst.join("audit_already.png"), b"already_data").unwrap();
+        fs::write(src.join("already.png"), b"already_data").unwrap();
+
+        let cat_path = src.join("catalog.csv");
+        fs::write(
+            &cat_path,
+            "filename|caption|slug\npresent.png|Presente|audit\nabsent.png|Ausente|audit\nalready.png|Já sincronizada|audit\n",
+        )
+        .unwrap();
+
+        let res = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(res["status"], "OK");
+        assert_eq!(res["synced"], 1);
+        assert_eq!(res["would_copy_count"], 1);
+        assert_eq!(res["would_copy"][0]["namespaced"], "audit_present.png");
+        assert_eq!(res["missing"], 1);
+        let missing_sources = res["missing_sources"].as_array().unwrap();
+        assert_eq!(missing_sources.len(), 1);
+        assert_eq!(missing_sources[0]["namespaced"], "audit_absent.png");
+        // Ratio is computed over the applied set: synced / (synced + missing + collisions).
+        // The pending copy is not counted as a failure.
+        assert_eq!(res["sync_ratio"], 0.5);
+
+        // `--fail-on-missing` turns a dry-run with missing sources into exit 1.
+        let err = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+            "--fail-on-missing".to_string(),
+        ])
+        .unwrap_err();
+        assert_eq!(err.0, 1);
+        let err_val: Value = serde_json::from_str(&err.1).unwrap();
+        assert_eq!(err_val["code"], "MEDIA.SOURCE_MISSING");
+        assert_eq!(err_val["missing"], 1);
+        assert_eq!(err_val["would_copy_count"], 1);
+    }
+
+    #[test]
+    fn test_insecure_namespaced_is_rejected_before_noise_filter() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("src");
+        let dst = dir.path().join("dst");
+        fs::create_dir(&src).unwrap();
+        fs::create_dir(&dst).unwrap();
+
+        // Empty caption means "noise": before the fix this was counted as `skipped_noise`
+        // and the run reported status OK.
+        let cat_path = src.join("catalog.json");
+        fs::write(
+            &cat_path,
+            r#"{"items":[{"filename":"safe.png","namespaced":"../evil.png","caption":""}]}"#,
+        )
+        .unwrap();
+
+        let err = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap_err();
+
+        assert_eq!(err.0, 1);
+        let err_val: Value = serde_json::from_str(&err.1).unwrap();
+        assert_eq!(err_val["code"], "MEDIA.SECURITY_ERROR");
+        assert!(
+            err_val["message"].as_str().unwrap().contains("../evil.png"),
+            "{err_val}"
+        );
+
+        // Same violation with explicit `noise: true`: still rejected.
+        fs::write(
+            &cat_path,
+            r#"{"items":[{"filename":"../evil.png","caption":"Legenda válida","noise":true}]}"#,
+        )
+        .unwrap();
+        let err = run(&[
+            "--catalog".to_string(),
+            cat_path.to_str().unwrap().to_string(),
+            "--collection-media-dir".to_string(),
+            dst.to_str().unwrap().to_string(),
+            "--copy-noise".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap_err();
+        let err_val: Value = serde_json::from_str(&err.1).unwrap();
+        assert_eq!(err_val["code"], "MEDIA.SECURITY_ERROR");
     }
 
     #[test]

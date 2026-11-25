@@ -72,6 +72,31 @@ def test_media_figure_explicit_style_supported():
     assert '<figcaption style="color: red">' in html
 
 
+def test_media_figure_escapes_every_attribute_value():
+    """B7: filename/style/caption_style must be escaped exactly like Rust's html_escape_attr."""
+    fig = MediaFigure(
+        filename='a"b.png',
+        caption="Legenda descritiva com mais de vinte caracteres clínicos",
+        style='x" onload="y',
+        caption_style='p" onmouseover="q',
+    )
+    html = fig.render_html()
+
+    # The quote never escapes the attribute, so no injected handler can appear.
+    assert 'src="a&quot;b.png"' in html
+    assert '<figure style="x&quot; onload=&quot;y">' in html
+    assert '<figcaption style="p&quot; onmouseover=&quot;q">' in html
+    assert 'onload="y"' not in html
+    assert 'onmouseover="q"' not in html
+    assert html.count("<img") == 1
+
+    # &, <, > and ' are escaped too (parity with html_escape_attr in media_figure.rs:47).
+    tricky = MediaFigure(filename="a&b<c>'d.png", caption="", style="a&b<c>")
+    rendered = tricky.render_html()
+    assert 'src="a&amp;b&lt;c&gt;&#x27;d.png"' in rendered
+    assert 'style="a&amp;b&lt;c&gt;"' in rendered
+
+
 # ── Task 2: CardDraft.figuras and all_figures() ─────────────────────────────
 
 

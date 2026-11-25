@@ -1,5 +1,10 @@
 # Pipeline de Criação Clínica de Flashcards — Wave 2
 
+> **Documento histórico.** Este arquivo descreve o estado da integração Wave 2 no momento em que foi
+> escrito e menciona ferramentas, subcomandos e códigos de diagnóstico que não existem mais na
+> superfície atual. Ele é mantido apenas como registro de migração e **não deve ser usado como
+> referência de comportamento**. Superfície atual: [docs/architecture.md](../architecture.md).
+
 Este documento estabelece as especificações arquiteturais, APIs determinísticas, catálogo de diagnósticos e diretrizes operacionais do pipeline de criação clínica de flashcards (**Wave 2**) no projeto `anki-workflow-mcp`.
 
 ---
@@ -209,7 +214,7 @@ O binário suporta dois modos operacionais principais:
 
 Os comandos listados a seguir são documentados para fins de execução e auditoria por pipelines de integração contínua (CI) e mantenedores técnicos do repositório.
 
-> **NOTA DE CONFORMIDADE:** Os gates abaixo foram executados no workspace local desta integração (Windows, Rust stable, Python 3.14, Node 22) e o resultado real de cada um está registrado em `docs/wave2-acceptance.md`. Nenhum comando desta seção altera coleções, baralhos ou mídia do Anki.
+> **NOTA DE CONFORMIDADE:** Os gates abaixo foram executados no workspace local desta integração (Windows, Rust stable, Python 3.14, Node 22) e o resultado real de cada um está registrado em `docs/migration/wave2-acceptance.md`. Nenhum comando desta seção altera coleções, baralhos ou mídia do Anki.
 
 ### 6.1. Verificação da Suíte Rust
 ```bash

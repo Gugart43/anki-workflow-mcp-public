@@ -126,6 +126,18 @@
       "text": "<img src=\"x.png\"> & <!-- oculto < 5 -->",
       "is_images_field": false,
       "convert_markdown": false
+    },
+    {
+      "name": "unclosed_cite_is_auto_closed",
+      "text": "Fonte: <cite>Harrison 21e - cap. 400",
+      "is_images_field": false,
+      "convert_markdown": false
+    },
+    {
+      "name": "unclosed_cite_inside_other_markup",
+      "text": "<b>Resumo</b> <cite>UpToDate 2024",
+      "is_images_field": false,
+      "convert_markdown": false
     }
   ],
   "check_csv": [
@@ -152,6 +164,12 @@
       "note_type": "CL",
       "enforce_header": false,
       "csv_text": "Sentença|Notas|Campo|Img|Ref|Tags\n<figure><img src=\"x.png\"></figure>|Texto &amp; <unknown>ok</unknown>|Neuro||Ref|tag\n"
+    },
+    {
+      "name": "canonical_v2_semantic_blocks_have_no_forbidden_tags",
+      "note_type": "QA",
+      "enforce_header": true,
+      "csv_text": "Enunciado|Resposta|Campo de Estudo|Notas Adicionais|Imagens Relacionadas|Referências|Etiquetas\nQual o tratamento na janela de 4,5 h?|Alteplase EV|Neurologia|<section class=\"anki-note-section\"><h2 class=\"anki-kv-section\">Tratamento</h2><dl class=\"anki-kv\"><dt class=\"anki-kv-section\"><abbr title=\"Ativador do plasminogenio tecidual\">tPA</abbr></dt><dd>Alteplase EV</dd></dl><details class=\"anki-details\"><summary class=\"hint-summary\">Ver detalhe</summary><p>Janela de 4,5 h</p></details><h3>Notas</h3></section>||Ref|AVC\n"
     }
   ],
   "check_cloze": [
@@ -209,6 +227,24 @@
       "notes": "- item sem bold\nFonte: Harrison\nAlteplase IV",
       "answer": "Alteplase IV",
       "row": 3
+    },
+    {
+      "name": "metadata_markdown_bold_evasion",
+      "notes": "**ID:**B01-QA-042<br>Explicação: risco de sangramento.",
+      "answer": "",
+      "row": 4
+    },
+    {
+      "name": "metadata_bullet_prefix_evasion",
+      "notes": "• ID: B01-QA-042<br>Explicação: risco de sangramento.",
+      "answer": "",
+      "row": 5
+    },
+    {
+      "name": "metadata_prose_without_header_colon_is_clean",
+      "notes": "Identificação de critérios maiores de Jones.<br>Âncora cirúrgica na valva aórtica com relevância clínica.",
+      "answer": "",
+      "row": 6
     }
   ]
 }

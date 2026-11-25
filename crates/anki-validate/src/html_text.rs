@@ -52,9 +52,6 @@ const BLOCK_TAGS: &[&str] = &[
 static WHITESPACE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+").expect("valid WHITESPACE_RE"));
 
-static LEADING_BULLET_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[•▪▸►\-–—*\s]+").expect("valid LEADING_BULLET_RE"));
-
 static TRAILING_PUNCT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[.!?…:;\s]+$").expect("valid TRAILING_PUNCT_RE"));
 
@@ -200,12 +197,27 @@ pub fn visible_char_count(raw: &str) -> usize {
 #[must_use]
 pub fn normalize_for_exact_match(raw: &str) -> String {
     let lowered = html_to_visible_text(raw).to_lowercase();
-    let without_leading = LEADING_BULLET_RE.replace(&lowered, "");
-    let without_trailing = TRAILING_PUNCT_RE.replace(&without_leading, "");
+    let without_leading = strip_leading_markers(&lowered);
+    let without_trailing = TRAILING_PUNCT_RE.replace(without_leading, "");
     WHITESPACE_RE
         .replace_all(&without_trailing, " ")
         .trim()
         .to_owned()
+}
+
+/// Remove a corrida de bullets (e espaços) que abre o texto.
+///
+/// Equivale à antiga classe `[•▪▸►\-–—*\s]+`, agora derivada de
+/// [`crate::text_norm::BULLET_GLYPHS`] — a união dos glifos vive num único lugar (Onda 2, B24).
+fn strip_leading_markers(s: &str) -> &str {
+    let mut current = s;
+    loop {
+        let (rest, marker) = crate::text_norm::strip_leading_marker(current);
+        match marker {
+            Some(_) => current = rest,
+            None => return current.trim_start(),
+        }
+    }
 }
 
 /// Remove blocos `<table>...</table>` de um fragmento HTML, suportando aninhamento correto.

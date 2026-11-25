@@ -119,21 +119,17 @@ export function mergeDeterministic(existing, incoming, name, originExisting, ori
         }
       } else if (isDescMeta) {
         if (typeof existing.description === "string" && typeof incoming.description === "string") {
-          if (existing.description === incoming.description) {
-            merged.description = existing.description;
-          } else {
-            // Deterministic description selection: prefer longer description, break tie with code point
-            if (existing.description.length > incoming.description.length) {
-              merged.description = existing.description;
-            } else if (incoming.description.length > existing.description.length) {
-              merged.description = incoming.description;
-            } else {
-              merged.description =
-                compareCodePoint(existing.description, incoming.description) <= 0
-                  ? existing.description
-                  : incoming.description;
-            }
+          if (existing.description !== incoming.description) {
+            // Never pick "the longest one" silently: two different doc comments for the
+            // same shared type mean the Rust sources disagree about the contract.
+            throw new Error(
+              `Conflicting JSON Schema definition for '${name}' at '${pathTrail || name}': conflicting description between ${originExisting} and ${originIncoming}.\n` +
+                `  ${originExisting}: ${JSON.stringify(existing.description)}\n` +
+                `  ${originIncoming}: ${JSON.stringify(incoming.description)}\n` +
+                `Align the Rust doc comments so every occurrence of '${name}' carries the same description, or drop the doc comment from all but one occurrence.`,
+            );
           }
+          merged.description = existing.description;
         } else {
           merged.description = existing.description || incoming.description;
         }
@@ -174,6 +170,223 @@ export function registerDef(defs, origins, name, schema, origin) {
   }
   defs[name] = normalized;
   origins[name] = origin;
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sample(text, limit = 120) {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+}
+
+/**
+ * Names declared at the top level of the compiled `.d.ts`
+ * (`export interface X`, `export type X = …`, `export const X`, `export enum X`).
+ */
+export function collectEmittedTypeNames(compiledTs) {
+  const names = new Set();
+  for (const match of compiledTs.matchAll(
+    /^export\s+(?:interface|type|const|enum|namespace)\s+([A-Za-z_$][\w$]*)/gm,
+  )) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
+function collectRefTargets(node, out) {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectRefTargets(item, out);
+    }
+    return;
+  }
+  if (node === null || typeof node !== "object") {
+    return;
+  }
+  if (typeof node.$ref === "string") {
+    const match = /^#\/\$defs\/(.+)$/.exec(node.$ref);
+    if (match) {
+      out.add(match[1].replace(/~1/g, "/").replace(/~0/g, "~"));
+    }
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "$defs") {
+      // A definition body is walked when (and only when) something references it.
+      continue;
+    }
+    collectRefTargets(value, out);
+  }
+}
+
+/**
+ * Definition names reachable from the bundle root through `$ref` chains.
+ * `json-schema-to-typescript` runs with `unreachableDefinitions: false`, so anything
+ * outside this set is dropped from the emitted `.d.ts` without a warning.
+ */
+export function collectReachableDefinitions(bundleSchema) {
+  const defs = bundleSchema.$defs ?? {};
+  const reachable = new Set();
+  const pending = [];
+  const roots = new Set();
+  collectRefTargets(bundleSchema.properties ?? {}, roots);
+  pending.push(...roots);
+
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (reachable.has(name) || !Object.hasOwn(defs, name)) {
+      continue;
+    }
+    reachable.add(name);
+    const found = new Set();
+    collectRefTargets(defs[name], found);
+    for (const next of found) {
+      if (!reachable.has(next)) {
+        pending.push(next);
+      }
+    }
+  }
+  return reachable;
+}
+
+/**
+ * (a) Every `$defs` entry of the input schemas must either appear in the emitted types or be
+ * explicitly referenced — otherwise the codegen silently discards contract types.
+ */
+export function assertDefinitionCoverage({ compiledTs, bundleSchema, defOrigins = {} }) {
+  const defs = bundleSchema.$defs ?? {};
+  const emitted = collectEmittedTypeNames(compiledTs);
+  const reachable = collectReachableDefinitions(bundleSchema);
+
+  const orphans = [];
+  const missing = [];
+  for (const name of Object.keys(defs).sort(compareCodePoint)) {
+    if (emitted.has(name)) {
+      continue;
+    }
+    const origin = defOrigins[name] ?? "unknown schema";
+    if (reachable.has(name)) {
+      missing.push(
+        `  - '${name}' is reachable from the bundle root but was not emitted (defined in ${origin})`,
+      );
+    } else {
+      orphans.push(
+        `  - '${name}' is emitted nowhere and referenced nowhere (defined in ${origin})`,
+      );
+    }
+  }
+
+  if (orphans.length === 0 && missing.length === 0) {
+    // `emittedTypeCount` also counts the bundle root interface (`AnkiWorkflowContractsV2`).
+    return { emittedTypeCount: emitted.size, reachableDefinitionCount: reachable.size };
+  }
+
+  throw new Error(
+    [
+      "JSON Schema -> TypeScript codegen lost contract definitions:",
+      ...orphans,
+      ...missing,
+      "json-schema-to-typescript runs with `unreachableDefinitions: false`, so an unreferenced",
+      "definition disappears from the .d.ts without any warning. Fix the schema source: delete the",
+      "stale `$defs` entry, or add an explicit `$ref` to it so it is part of the contract.",
+    ].join("\n"),
+  );
+}
+
+/**
+ * (b) A duplicated `title` is only harmless when the bodies are byte-identical.
+ * Two different definitions claiming the same `title` make `json-schema-to-typescript`
+ * invent suffixed types (`CompileMode1`, `QualityMode1`), so it is an error here.
+ */
+export function assertUniqueTitles({ defs, defOrigins = {} }) {
+  const byTitle = new Map();
+  for (const name of Object.keys(defs).sort(compareCodePoint)) {
+    const title = defs[name]?.title;
+    if (typeof title !== "string") {
+      continue;
+    }
+    if (!byTitle.has(title)) {
+      byTitle.set(title, []);
+    }
+    byTitle.get(title).push({
+      name,
+      origin: defOrigins[name] ?? "unknown schema",
+      body: JSON.stringify(canonicalize(stripDocMetadata(defs[name]))),
+    });
+  }
+
+  const conflicts = [];
+  for (const [title, group] of byTitle) {
+    if (new Set(group.map((item) => item.name)).size < 2) {
+      continue;
+    }
+    const bodies = new Set(group.map((item) => item.body));
+    if (bodies.size === 1) {
+      continue;
+    }
+    conflicts.push(
+      `  - title '${title}' is claimed by ${group
+        .map((item) => `'${item.name}' (${item.origin})`)
+        .join(" and ")} with ${bodies.size} different bodies`,
+    );
+  }
+
+  if (conflicts.length > 0) {
+    throw new Error(
+      [
+        "Duplicate JSON Schema `title` with different bodies:",
+        ...conflicts,
+        "Identical bodies may share a title; different bodies must not, because the TypeScript",
+        "codegen then emits `Foo`/`Foo1` and consumers silently bind the wrong shape.",
+        "Give each definition a distinct title (or drop the redundant one) at the Rust source.",
+      ].join("\n"),
+    );
+  }
+}
+
+/**
+ * (c) A schema that forbids every extra property and declares none is `Record<string, never>`
+ * in TypeScript, not `{}` (which accepts any non-null value).
+ */
+export function isKeylessObjectSchema(schema) {
+  const body = canonicalize(stripDocMetadata(schema));
+  const keys = Object.keys(body);
+  return (
+    keys.length === 2 &&
+    body.type === "object" &&
+    body.additionalProperties === false
+  );
+}
+
+export function applyKeylessObjectTypes(compiledTs, defs) {
+  let output = compiledTs;
+  const rewritten = [];
+  for (const name of Object.keys(defs).sort(compareCodePoint)) {
+    if (!isKeylessObjectSchema(defs[name])) {
+      continue;
+    }
+    const expected = `export interface ${name} {}`;
+    const pattern = new RegExp(`^export interface ${escapeRegExp(name)} \\{\\}$`, "m");
+    if (!pattern.test(output)) {
+      throw new Error(
+        [
+          `Expected \`${expected}\` for the keyless object schema '${name}', but the compiled .d.ts has:`,
+          `  ${sample(findDeclaration(output, name) ?? "<no declaration>")}`,
+          "The schema declares `type: object` + `additionalProperties: false` with no properties,",
+          "so the emitted type must be rewritten to `Record<string, never>`.",
+        ].join("\n"),
+      );
+    }
+    output = output.replace(pattern, `export type ${name} = Record<string, never>;`);
+    rewritten.push(name);
+  }
+  return { compiledTs: output, rewritten };
+}
+
+function findDeclaration(compiledTs, name) {
+  const pattern = new RegExp(`^export\\s+(?:interface|type)\\s+${escapeRegExp(name)}\\b.*$`, "m");
+  return pattern.exec(compiledTs)?.[0];
 }
 
 export async function generateContracts(schemasDir, tsOutDir, options = {}) {
@@ -263,7 +476,19 @@ export async function generateContracts(schemasDir, tsOutDir, options = {}) {
     },
   });
 
-  const normalizedTs = `${compiled.replace(/\r\n/g, "\n").trimEnd()}\n`;
+  const normalizedCompiled = `${compiled.replace(/\r\n/g, "\n").trimEnd()}\n`;
+
+  // Post-compile assertions: the three silent failure modes (orphan `$defs`, duplicated
+  // `title`, conflicting `description`) must fail loudly instead of shrinking the contract.
+  assertUniqueTitles({ defs: sortedDefs, defOrigins });
+  const coverage = assertDefinitionCoverage({
+    compiledTs: normalizedCompiled,
+    bundleSchema,
+    defOrigins,
+  });
+  const keyless = applyKeylessObjectTypes(normalizedCompiled, sortedDefs);
+
+  const normalizedTs = keyless.compiledTs;
   const tsOutFile = path.join(tsOutDir, "index.d.ts");
   if (checkOnly) {
     let existingTs;
@@ -284,6 +509,9 @@ export async function generateContracts(schemasDir, tsOutDir, options = {}) {
     tsOutFile,
     schemaCount: entries.length,
     defsCount: Object.keys(sortedDefs).length,
+    emittedTypeCount: coverage.emittedTypeCount,
+    reachableDefinitionCount: coverage.reachableDefinitionCount,
+    keylessObjects: keyless.rewritten,
   };
 }
 

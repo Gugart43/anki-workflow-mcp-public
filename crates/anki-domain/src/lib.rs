@@ -544,6 +544,12 @@ pub struct Diagnostic {
     pub suggestion: Option<String>,
     pub auto_fix_available: bool,
     pub fix_preview: Option<String>,
+    /// Original diagnostic code this entry was derived from, when a pipeline
+    /// stage re-labels a diagnostic under a gate-specific code (e.g. a
+    /// `NOTE.*` Critical surfaced as `QUALITY.CARD_CRITICAL`). `None` for
+    /// native diagnostics, so serialized JSON is unchanged in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause_code: Option<String>,
 }
 
 impl Diagnostic {
@@ -564,6 +570,7 @@ impl Diagnostic {
             suggestion: None,
             auto_fix_available: false,
             fix_preview: None,
+            cause_code: None,
         }
     }
 
@@ -610,6 +617,14 @@ impl Diagnostic {
     pub fn with_auto_fix(mut self, available: bool, preview: Option<String>) -> Self {
         self.auto_fix_available = available;
         self.fix_preview = preview;
+        self
+    }
+
+    /// Preserva a identidade do diagnóstico original quando uma etapa posterior
+    /// o remapeia para um código agregado de gate.
+    #[must_use]
+    pub fn with_cause_code(mut self, code: impl Into<String>) -> Self {
+        self.cause_code = Some(code.into());
         self
     }
 }
@@ -1066,5 +1081,29 @@ mod tests {
         let json = serde_json::to_string(&d1).unwrap();
         let de: Diagnostic = serde_json::from_str(&json).unwrap();
         assert_eq!(de, d1);
+    }
+
+    #[test]
+    fn cause_code_is_serialized_only_when_present() {
+        let plain =
+            Diagnostic::from_static_code("CSV.BAD_COLUMNS", Severity::Critical, "csv", "msg");
+        assert_eq!(plain.cause_code, None);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(
+            !json.contains("cause_code"),
+            "JSON sem cause_code deve permanecer byte-idêntico: {json}"
+        );
+
+        let with_cause = plain.clone().with_cause_code("NOTE.METADATA");
+        assert_eq!(with_cause.cause_code.as_deref(), Some("NOTE.METADATA"));
+        let json_cause = serde_json::to_string(&with_cause).unwrap();
+        assert!(json_cause.contains("\"cause_code\":\"NOTE.METADATA\""));
+        assert_eq!(
+            serde_json::from_str::<Diagnostic>(&json_cause).unwrap(),
+            with_cause
+        );
+
+        // Payloads antigos (sem o campo) continuam desserializáveis.
+        assert_eq!(serde_json::from_str::<Diagnostic>(&json).unwrap(), plain);
     }
 }

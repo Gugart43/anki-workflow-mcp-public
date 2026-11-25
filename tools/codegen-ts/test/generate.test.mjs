@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   canonicalize,
   stripDocMetadata,
@@ -10,6 +11,12 @@ import {
   registerDef,
   generateContracts,
 } from "../generate.mjs";
+
+// Resolvido a partir DESTE arquivo, nunca de `process.cwd()`: `node --test` pode ser invocado
+// da raiz do repositório ou de `tools/codegen-ts`, e o binário do `tsc` está em
+// `tools/codegen-ts/node_modules`.
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const TSC_JS = path.resolve(TEST_DIR, "..", "node_modules", "typescript", "bin", "tsc");
 
 test("canonicalize recursively sorts object keys", () => {
   const input = {
@@ -47,10 +54,10 @@ test("stripDocMetadata removes title and description recursively", () => {
   });
 });
 
-test("mergeDeterministic merges shared defs with different descriptions deterministically", () => {
+test("mergeDeterministic keeps identical shared defs byte-identical", () => {
   const def1 = {
     title: "Diagnostic",
-    description: "Short",
+    description: "Detailed diagnostic message with full context.",
     type: "object",
     properties: {
       code: { type: "string" },
@@ -68,10 +75,19 @@ test("mergeDeterministic merges shared defs with different descriptions determin
   const merged1 = mergeDeterministic(def1, def2, "Diagnostic", "fileA", "fileB");
   const merged2 = mergeDeterministic(def2, def1, "Diagnostic", "fileB", "fileA");
 
-  // Both should pick the longer, more descriptive docstring
   assert.strictEqual(merged1.description, "Detailed diagnostic message with full context.");
-  assert.strictEqual(merged2.description, "Detailed diagnostic message with full context.");
   assert.deepStrictEqual(merged1, merged2);
+});
+
+// B12/CT-03: "longest description wins" is gone — divergent docstrings are a hard error.
+test("mergeDeterministic throws on conflicting descriptions", () => {
+  const def1 = { title: "Diagnostic", description: "Short", type: "string" };
+  const def2 = { title: "Diagnostic", description: "Much longer description.", type: "string" };
+
+  assert.throws(
+    () => mergeDeterministic(def1, def2, "Diagnostic", "fileA", "fileB"),
+    /conflicting description between fileA and fileB/,
+  );
 });
 
 test("mergeDeterministic reconciles missing titles/descriptions", () => {
@@ -217,8 +233,7 @@ test("generateContracts produces deterministic LF .d.ts from test schemas", asyn
 
   // Check that tsc validates the generated file with --noEmit
   const { execFileSync } = await import("node:child_process");
-  const tscJs = path.resolve("node_modules", "typescript", "bin", "tsc");
-  execFileSync(process.execPath, [tscJs, "--noEmit", "--target", "ES2024", "--module", "NodeNext", res1.tsOutFile], {
+  execFileSync(process.execPath, [TSC_JS, "--noEmit", "--target", "ES2024", "--module", "NodeNext", res1.tsOutFile], {
     cwd: tempDir,
     stdio: "pipe",
   });

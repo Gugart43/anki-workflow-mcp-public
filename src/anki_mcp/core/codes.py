@@ -222,12 +222,9 @@ _CODES: list[ErrorDef] = [
         "anki-qa-designer",
         "Possible natural pair (drug+dose) — review atomicity",
     ),
-    ErrorDef(
-        "QA.INTERFERENCE_WARN",
-        "WARN",
-        "anki-qa-designer",
-        "High similarity with another card in the batch",
-    ),
+    # `QA.INTERFERENCE_WARN` is retired: Rust emits `CARD.INTERFERENCE_PAIR_WARN`
+    # (crates/anki-validate/src/interference.rs:17). Old payloads still resolve
+    # through RETIRED_ALIASES below, so nothing silently loses its meaning.
     # ── Notes ───────────────────────────────────────────────────────────────
     ErrorDef(
         "NOTE.METADATA",
@@ -472,27 +469,227 @@ _CODES: list[ErrorDef] = [
         "anki-registry",
         "Topic present in corpus but absent from deck coverage",
     ),
+    # ── Card atomicity / length (emitted by checks/qa.py and checks/cloze.py,
+    #    mirrored 1:1 by the Rust validators crates/anki-validate/src/{qa,cloze}.rs) ──
+    ErrorDef(
+        "CARD.SPLIT_QA_MULTI_QUESTION",
+        "WARN",
+        "anki-card-generator",
+        "Stem asks more than one question (two obligations on one card)",
+    ),
+    ErrorDef(
+        "CARD.SPLIT_CLOZE_INDICES",
+        "CRITICAL",
+        "anki-card-generator",
+        "More cloze indices than the operational cap (one note expands to many cards)",
+    ),
+    ErrorDef(
+        "CARD.TOO_LONG_STEM",
+        "WARN",
+        "anki-card-generator",
+        "Stem length above the review threshold (advisory, not proof of multiple demands)",
+    ),
+    ErrorDef(
+        "CARD.TOO_LONG_ANSWER",
+        "WARN",
+        "anki-card-generator",
+        "Answer length above the review threshold (advisory)",
+    ),
+    ErrorDef(
+        "CARD.TOO_LONG_SENTENCE",
+        "WARN",
+        "anki-card-generator",
+        "Cloze carrier sentence above the review threshold (advisory)",
+    ),
+    ErrorDef(
+        "CARD.TOO_LONG_DELETION",
+        "WARN",
+        "anki-card-generator",
+        "Cloze deletion above the review threshold (advisory)",
+    ),
+    ErrorDef(
+        "CARD.INTERFERENCE_PAIR_WARN",
+        "WARN",
+        "anki-card-generator",
+        "Highly similar prompts charging distinct clinical targets (recommend mutual burying)",
+    ),
+    # ── Information profile advisories (checks/information.py advisory_signals) ──
+    ErrorDef(
+        "INFO.PROMPT_UNAVAILABLE",
+        "INFO",
+        "anki-card-generator",
+        "Partial information profile: no stem/sentence available for evaluation",
+    ),
+    ErrorDef(
+        "INFO.QA_HIDDEN_LIST",
+        "INFO",
+        "anki-qa-designer",
+        "QA answer holds 3+ candidate items (review semantic independence)",
+    ),
+    ErrorDef(
+        "INFO.CLOZE_HIDDEN_LIST",
+        "INFO",
+        "anki-cloze-creator",
+        "Cloze deletion holds 3+ candidate items (review semantic independence)",
+    ),
+    # ── Corpus ──────────────────────────────────────────────────────────────
+    ErrorDef(
+        "CORPUS.NO_SOURCE",
+        "WARN",
+        "anki-card-generator",
+        "No source text provided or found under deck_dir/corpus",
+    ),
+    # ── Pipeline phases and gates ───────────────────────────────────────────
+    ErrorDef(
+        "PIPELINE.TERMINAL",
+        "CRITICAL",
+        "anki-card-generator",
+        "Batch is already exported; no further transitions are allowed",
+    ),
+    ErrorDef(
+        "PIPELINE.INVALID_STATE",
+        "CRITICAL",
+        "anki-card-generator",
+        "Batch state is unknown and has no allowed transition",
+    ),
+    ErrorDef(
+        "PIPELINE.GATE_REQUIRED",
+        "CRITICAL",
+        "anki-card-generator",
+        "Phase has no recorded PASS gate, so the advance is blocked",
+    ),
+    ErrorDef(
+        "PIPELINE.GATE_INVALID",
+        "CRITICAL",
+        "anki-card-generator",
+        "Recorded gate value is not a valid receipt hash",
+    ),
+    ErrorDef(
+        "PIPELINE.RECEIPT_MISMATCH",
+        "CRITICAL",
+        "anki-card-generator",
+        "receipt_hash does not match the gate recorded for the current phase",
+    ),
+    # ── Export ──────────────────────────────────────────────────────────────
+    ErrorDef(
+        "EXPORT.NO_RECEIPT",
+        "CRITICAL",
+        "anki-export-validator",
+        "Export attempted without a receipt matching the exact CSV content",
+    ),
+    ErrorDef(
+        "EXPORT.VALIDATION_FAIL",
+        "CRITICAL",
+        "anki-export-validator",
+        "Re-validation verdict is not PASS at export time",
+    ),
+    ErrorDef(
+        "EXPORT.BATCH_CONFLICT",
+        "CRITICAL",
+        "anki-export-validator",
+        "Batch content differs from an already committed/exported receipt",
+    ),
+    # ── Media (tools/media.py, mirrors apps/.../cli/sync_media.rs) ──────────
+    ErrorDef(
+        "MEDIA.CATALOG_ERROR",
+        "CRITICAL",
+        "anki-image-injector",
+        "Media catalog unreadable or malformed",
+    ),
+    ErrorDef(
+        "MEDIA.COLLISION",
+        "CRITICAL",
+        "anki-image-injector",
+        "Catalog entry collides with an existing file in collection.media",
+    ),
+    ErrorDef(
+        "MEDIA.SOURCE_MISSING",
+        "CRITICAL",
+        "anki-image-injector",
+        "Catalog source files are missing; nothing was copied",
+    ),
+    ErrorDef(
+        "MEDIA.IO_ERROR",
+        "CRITICAL",
+        "anki-image-injector",
+        "I/O failure while copying media (batch rolled back)",
+    ),
+    # ── Runtime / tool boundary (core/safe.py) ──────────────────────────────
+    ErrorDef(
+        "ARGUMENT.INVALID",
+        "CRITICAL",
+        "anki-card-generator",
+        "Tool arguments invalid (malformed JSON, wrong type or value)",
+    ),
+    ErrorDef(
+        "RUNTIME.ERROR",
+        "CRITICAL",
+        "anki-card-generator",
+        "Operation could not complete (deliberate RuntimeError without coded prefix)",
+    ),
+    ErrorDef(
+        "INTERNAL.UNEXPECTED",
+        "CRITICAL",
+        "anki-card-generator",
+        "Unexpected exception escaped a tool (normalized, never a raw traceback)",
+    ),
+    ErrorDef(
+        "DECK.NOT_FOUND",
+        "CRITICAL",
+        "anki-registry",
+        "Deck directory (or manifesto.json) does not exist",
+    ),
+    ErrorDef(
+        "FILE.NOT_FOUND",
+        "CRITICAL",
+        "anki-registry",
+        "Requested file does not exist",
+    ),
+    ErrorDef(
+        "HIERARCHY.CORRUPT",
+        "CRITICAL",
+        "anki-registry",
+        "hierarchy.json unreadable or missing the 'decks' key",
+    ),
+    # ── Sanitizer guards (core/sanitize.py) ─────────────────────────────────
+    ErrorDef(
+        "SANITIZE.INPUT_TOO_LARGE",
+        "CRITICAL",
+        "anki-formatting-guide",
+        "Field exceeds the sanitizer input cap; split the content before sanitizing",
+    ),
 ]
+
+# Retired codes kept as aliases so historical payloads still resolve to a real
+# definition instead of raising KeyError.
+RETIRED_ALIASES: dict[str, str] = {
+    "QA.INTERFERENCE_WARN": "CARD.INTERFERENCE_PAIR_WARN",
+}
 
 # Build lookup dicts
 _BY_CODE: dict[str, ErrorDef] = {e.code: e for e in _CODES}
 
 
+def resolve(code: str) -> str:
+    """Return the registered code that *code* maps to (following retired aliases)."""
+    return RETIRED_ALIASES.get(code, code)
+
+
 def get(code: str) -> ErrorDef:
     """Return the ErrorDef for *code*; raises KeyError if unknown."""
-    return _BY_CODE[code]
+    return _BY_CODE[resolve(code)]
 
 
 def severity(code: str) -> str:
-    return _BY_CODE[code].severity
+    return _BY_CODE[resolve(code)].severity
 
 
 def owner(code: str) -> str:
-    return _BY_CODE[code].owner
+    return _BY_CODE[resolve(code)].owner
 
 
 def is_critical(code: str) -> bool:
-    return _BY_CODE[code].severity == "CRITICAL"
+    return _BY_CODE[resolve(code)].severity == "CRITICAL"
 
 
 def all_codes() -> list[str]:
