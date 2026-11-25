@@ -380,8 +380,12 @@ describe('anki-workflow-mcp TypeScript E2E contract', () => {
 
     expect(badTipoResult.isError).toBe(true);
     const badTipoPayload = extractToolPayload(badTipoResult);
-    expect(badTipoPayload['code']).toBe('INVALID_ARGUMENTS');
+    // An unknown draft `tipo` decodes as arguments but fails draft normalization,
+    // so it is reported as a compile error rather than an argument error.
+    expect(badTipoPayload['code']).toBe('COMPILE.INVALID_DRAFT');
     expect(String(badTipoPayload['error'])).toContain('CLOZ');
+    expect(String(badTipoPayload['error'])).toContain('drafts[0]');
+    expect(Array.isArray(badTipoPayload['violations'])).toBe(true);
 
     const badRangeResult = (await client.callTool({
       name: 'quality_evaluate',
